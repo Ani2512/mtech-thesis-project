@@ -51,6 +51,9 @@ def main(argv=None):
     ap.add_argument("--n", type=int, default=None)
     ap.add_argument("--out", required=True)
     ap.add_argument("--seed", type=int, default=0)
+    ap.add_argument("--adapter", default=None,
+                    help="LoRA adapter from ctag.train_lora, so the fine-tuned model "
+                         "does the plain groundings and the code does the composition")
     a = ap.parse_args(argv)
 
     if a.grounder == "oracle":
@@ -62,8 +65,13 @@ def main(argv=None):
         g = oracle_grounder(tl)
         label = "agent:oracle"
     else:
-        g = model_grounder(a.grounder)
-        label = f"agent:{a.grounder}"
+        kw = {}
+        if a.adapter:
+            if a.grounder != "qwen2.5-omni":
+                raise SystemExit("--adapter is only wired for the qwen2.5-omni grounder")
+            kw["adapter"] = a.adapter
+        g = model_grounder(a.grounder, **kw)
+        label = f"agent:{a.grounder}" + ("+lora" if a.adapter else "")
 
     if a.jitter or a.drop or a.spurious:
         g = noisy_grounder(g, a.jitter, a.drop, a.spurious, a.seed)
