@@ -1,0 +1,9 @@
+# Phase 1 run matrix: zero-shot failure curve by condition type.
+benchmarks:
+  procedural: {source: procedural, n_clips: 100, seed: 0}
+  esc50:      {source: esc50, n_clips: 300, seed: 0, p_overlap: 0.35}
+models: [mock:ignore_condition, mock:first_only, qwen2.5-omni, qwen2-audio, gemini]
+# Diagnostic reading: if a real model's per-type numbers track mock:ignore_condition,
+# it perceives X but ignores the condition; if they track mock:first_only, it stops
+# after the first occurrence (TAG-Bench's finding). Both are decoder behaviours,
+# which is the case for fine-tuning rather than a new encoder.

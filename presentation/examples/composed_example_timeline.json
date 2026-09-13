@@ -1,0 +1,36 @@
+{
+  "seed": 0,
+  "duration": 20.0,
+  "events": [
+    {
+      "label": "siren",
+      "onset": 0.653,
+      "offset": 3.153
+    },
+    {
+      "label": "dog",
+      "onset": 2.328,
+      "offset": 4.828
+    },
+    {
+      "label": "siren",
+      "onset": 5.754,
+      "offset": 8.254
+    },
+    {
+      "label": "dog",
+      "onset": 10.718,
+      "offset": 13.218
+    },
+    {
+      "label": "car_horn",
+      "onset": 15.513,
+      "offset": 16.186
+    },
+    {
+      "label": "dog",
+      "onset": 15.799,
+      "offset": 18.299
+    }
+  ]
+}
