@@ -1240,3 +1240,16 @@ def test_vocab_is_recovered_from_the_tokenizer():
     v = TimeVocab(30.0, 0.1)
     got = vocab_from_tokenizer(_FakeTok(v))
     assert got.tokens == v.tokens
+
+
+def test_agent_adapter_is_only_wired_for_the_qwen_grounder(tmp_path):
+    """Arm F passes a LoRA adapter into the decompose arm; a grounder that
+    cannot take one must fail before loading anything."""
+    import pytest
+
+    from ctag.run_agent import main as run_agent
+
+    with pytest.raises(SystemExit) as e:
+        run_agent(["--grounder", "mock:oracle", "--adapter", str(tmp_path),
+                   "--bench", str(tmp_path / "none.jsonl"), "--out", str(tmp_path / "o")])
+    assert "adapter" in str(e.value)

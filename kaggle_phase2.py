@@ -179,6 +179,48 @@ ok &= run("eval arm E",
            "--bench", TEST, "--out", "runs/esc50/test_lora_tt"],
           "runs/esc50/test_lora_tt/summary.json")
 
+# --- arm F: the fine-tuned model as the grounder inside decompose-and-combine.
+# Phase 2's diagnosis was that grounding quality, not composition, bounds the
+# agent. Arm C moved PLAIN from 0.28 to 0.76 while its WHILE (0.25) and
+# NOT_FOLLOWED (0.13) stayed poor -- the types the agent computes in code from
+# two plain groundings. So: plain groundings from the adapter, composition from
+# the predicates, and a hybrid selected on val between direct-C and agent-C.
+# Costs about 50 min per adapter (val direct 27, agent test 15, agent val 8).
+# Arm E's adapter is included only if its own eval is valid (ALL f1 >= 0.3):
+# the first E eval scored 0.003 because of a loader bug, not the adapter.
+def _valid(summary_path, floor=0.3):
+    try:
+        return json.load(open(summary_path))["by_type"]["ALL"]["f1@0.5"] >= floor
+    except Exception:
+        return False
+
+for tag, floor in (("lora_text", 0.0), ("lora_tt", 0.3)):
+    adapter = f"{ADAPTERS}/{tag}"
+    if not os.path.exists(f"{adapter}/adapter_model.safetensors"):
+        continue
+    if not _valid(f"runs/esc50/test_{tag}/summary.json", floor):
+        print(f"\n=== arm F ({tag}): skipped, its direct eval is missing or below {floor} ===")
+        continue
+    ok &= run(f"arm F: direct {tag} on val",
+              ["ctag.run_zeroshot", "--model", "qwen2.5-omni", "--adapter", adapter,
+               "--bench", VAL, "--n", VAL_N, "--out", f"runs/esc50/val_{tag}"],
+              f"runs/esc50/val_{tag}/summary.json")
+    ok &= run(f"arm F: decompose with {tag} on test",
+              ["ctag.run_agent", "--grounder", "qwen2.5-omni", "--adapter", adapter,
+               "--bench", TEST, "--out", f"runs/esc50/test_agent_{tag}"],
+              f"runs/esc50/test_agent_{tag}/summary.json")
+    ok &= run(f"arm F: decompose with {tag} on val",
+              ["ctag.run_agent", "--grounder", "qwen2.5-omni", "--adapter", adapter,
+               "--bench", VAL, "--n", VAL_N, "--out", f"runs/esc50/val_agent_{tag}"],
+              f"runs/esc50/val_agent_{tag}/summary.json")
+    run(f"arm F: hybrid over {tag} (selection on val)",
+        ["ctag.hybrid", "--direct", f"runs/esc50/test_{tag}",
+         "--agent", f"runs/esc50/test_agent_{tag}",
+         "--direct-val", f"runs/esc50/val_{tag}",
+         "--agent-val", f"runs/esc50/val_agent_{tag}",
+         "--out", f"runs/esc50/test_hybrid_{tag}"],
+        f"runs/esc50/test_hybrid_{tag}/summary.json")
+
 # --- recall-biased decoding last: k forward passes per query is the priciest item.
 # k=3 rather than 5 keeps the run inside one session; simulations put the optimum
 # at k=5/2 votes but k=3 captures most of the gain (docs/recall_bias.md).
