@@ -4,7 +4,7 @@ Updates the code without deleting anything, rebuilds only what is missing, and
 finishes with the trainer smoke test. It has no ordering dependency on other
 cells, which is what kept going wrong.
 
-    !curl -sL https://raw.githubusercontent.com/Ani2512/mtech-project/compositional-temporal-grounding/research_project/kaggle_bootstrap.py -o /kaggle/working/bootstrap.py
+    !curl -sL https://raw.githubusercontent.com/Ani2512/mtech-thesis-project/main/kaggle_bootstrap.py -o /kaggle/working/bootstrap.py
     %run /kaggle/working/bootstrap.py
 """
 import os
@@ -15,9 +15,9 @@ import time
 # Clone OUTSIDE /kaggle/working. Kaggle publishes at most 500 output files, and
 # the clone (.git alone is hundreds) consumed the cap before results/ was
 # reached -- v2 completed and its summaries never made it into the output.
-REPO = "/kaggle/temp/mtech-project"
-WORK = f"{REPO}/research_project"
-BRANCH = "compositional-temporal-grounding"
+REPO = "/kaggle/temp/mtech-thesis-project"
+WORK = REPO                      # the project sits at the repo root
+BRANCH = "main"
 CACHE = "/kaggle/temp/hf"
 
 os.environ.setdefault("HF_HOME", CACHE)
@@ -45,7 +45,7 @@ if os.path.isdir(f"{REPO}/.git"):
     print("updated in place; data preserved")
 else:
     run(["git", "clone", "-q", "-b", BRANCH,
-         "https://github.com/Ani2512/mtech-project.git", REPO], check=True)
+         "https://github.com/Ani2512/mtech-thesis-project.git", REPO], check=True)
     print("cloned fresh")
 os.chdir(WORK)
 print(subprocess.run(["git", "log", "--oneline", "-1"], capture_output=True, text=True).stdout.strip())

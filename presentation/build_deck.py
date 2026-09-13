@@ -4,7 +4,7 @@ from pptx.dml.color import RGBColor
 from pptx.enum.text import PP_ALIGN, MSO_ANCHOR
 from pathlib import Path
 
-OUTDIR = Path("/Users/anirudh/Desktop/MTech Project/research_project/presentation")
+OUTDIR = Path(__file__).resolve().parent
 FIG = OUTDIR / "figures"
 
 INK   = RGBColor(0x0B, 0x0B, 0x0B)

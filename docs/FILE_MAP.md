@@ -1,7 +1,7 @@
 # What each file does
 
-Repository `github.com/Ani2512/mtech-project`, branch `compositional-temporal-grounding`,
-directory `research_project/`. 45 tracked files. Generated data, run outputs and
+Repository `github.com/Ani2512/mtech-thesis-project`, branch `main`, project at
+the repository root (moved 2026-09-13 from `Ani2512/mtech-project`). 45 tracked files. Generated data, run outputs and
 PDF exports are gitignored and rebuilt on demand.
 
 ---

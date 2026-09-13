@@ -31,7 +31,7 @@ import subprocess
 import sys
 import time
 
-WORK = "/kaggle/temp/mtech-project/research_project"   # clone lives outside the 500-file output cap
+WORK = "/kaggle/temp/mtech-thesis-project"   # clone lives outside the 500-file output cap
 TEST = "data/esc50/benchmark_test.jsonl"
 # Adapters go under /kaggle/working, which Kaggle keeps as the version output
 # even when a session is stopped by the quota or the session limit.

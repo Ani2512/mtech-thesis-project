@@ -4,7 +4,7 @@ import matplotlib.pyplot as plt
 import numpy as np
 from pathlib import Path
 
-OUT = Path("/Users/anirudh/Desktop/MTech Project/research_project/presentation/figures")
+OUT = Path(__file__).resolve().parent / "figures"
 BLUE, ORANGE = "#2a78d6", "#eb6834"
 INK, INK2, MUTED = "#0b0b0b", "#52514e", "#8a8880"
 SURFACE = "#ffffff"

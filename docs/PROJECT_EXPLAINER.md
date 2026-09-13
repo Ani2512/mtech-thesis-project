@@ -1099,6 +1099,6 @@ contribution, and the frozen audio encoder is the first suspect.
 
 ---
 
-*Code: `github.com/Ani2512/mtech-project`, branch `compositional-temporal-grounding`.
+*Code: `github.com/Ani2512/mtech-thesis-project`, branch `main` (moved 2026-09-13 from `Ani2512/mtech-project`, branch `compositional-temporal-grounding`, directory `research_project/`).
 Numbers: `docs/phase1_findings.md`, `docs/phase2_decomposition.md`,
 `docs/recall_bias.md`. Citations: `docs/references.md`.*

@@ -5,16 +5,16 @@
 #
 #   nohup bash scripts_phase1_full.sh > logs/phase1_full.log 2>&1 &
 set -u
-cd /content/mtech-project/research_project 2>/dev/null || {
-  cd /content && rm -rf mtech-project
-  git clone -q -b compositional-temporal-grounding https://github.com/Ani2512/mtech-project.git
-  cd mtech-project/research_project
+cd /content/mtech-thesis-project 2>/dev/null || {
+  cd /content && rm -rf mtech-thesis-project
+  git clone -q https://github.com/Ani2512/mtech-thesis-project.git
+  cd mtech-thesis-project
 }
 mkdir -p logs
 say() { echo "[$(date +%H:%M:%S)] $*"; }
 
 say "refreshing code"
-git fetch -q origin && git reset -q --hard origin/compositional-temporal-grounding
+git fetch -q origin && git reset -q --hard origin/main
 
 say "installing deps"
 pip install -q scipy soundfile librosa pyyaml pytest \
