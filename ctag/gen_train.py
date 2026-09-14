@@ -168,6 +168,8 @@ def render_only(out: Path, source: str, workers: int = 1, fmt: str = "wav",
         m = re.fullmatch(r"gen(\d+)_(\d+)", r["clip_id"])
         if not m:
             raise ValueError(f"not a generated clip id: {r['clip_id']}")
+        if r.get("hard") is None:
+            raise ValueError(f"{r['clip_id']}: no 'hard' flag stored; regenerate with the current ctag.gen_train")
         tasks.append((int(m.group(2)), int(m.group(1)), bool(r["hard"]), r["duration"], str(out), fmt, True, 0, False))
     init_args = (source, str(esc50_root) if esc50_root else None, classes)
     if workers > 1:
@@ -179,6 +181,12 @@ def render_only(out: Path, source: str, workers: int = 1, fmt: str = "wav",
     for r, got in zip(rows, results):
         if got["timeline"]["events"] != r["events"]:
             raise RuntimeError(f"{r['clip_id']}: regenerated timeline differs from the stored one")
+    # the file may have been copied from another machine or rendered in another
+    # format: point every row at the audio that now exists
+    with open(out / "timelines.jsonl", "w", encoding="utf-8") as ft:
+        for r, got in zip(rows, results):
+            r["audio"] = got["timeline"]["audio"]
+            ft.write(json.dumps(r) + "\n")
     return len(results)
 
 

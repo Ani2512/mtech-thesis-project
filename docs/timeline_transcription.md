@@ -68,4 +68,15 @@ with `--format flac`). Generation is CPU-bound and parallel (`--workers`).
   (`duration_ratio_median` 1.000). The hard recipes vary event length only through
   the source clip; `min_overlap` and gaps vary, durations still cap at 2.5 s.
 - The vocabulary list in the prompt closes the label set. Leave it out
-  (`--no-vocab-in-prompt`) for the open-vocabulary variant.
+  (`--no-vocab-in-prompt`) for the open-vocabulary variant. The list is read
+  from whichever timelines file a command is given, so a training set built with
+  a different class list would name different sounds at training and test time.
+- The shared `SYSTEM` prompt still says "a JSON list of [start, end] pairs". A
+  *base* model asked to transcribe may follow it and emit unlabelled pairs, which
+  parse with an empty label and score 0 on `f1` but normally on `f1_any_label`;
+  read the latter for untrained models. A trained model learns the object format.
+- `--start` appends to `timelines.jsonl` but `gen_stats.json` describes only the
+  last chunk; re-run `stats` over the whole file if the totals matter.
+- `--render-only` rewrites the `audio` paths in `timelines.jsonl` to the files it
+  just wrote, so a timelines file copied to another machine is usable after one
+  render.

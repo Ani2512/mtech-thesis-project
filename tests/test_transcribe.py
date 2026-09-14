@@ -114,7 +114,7 @@ def test_run_transcribe_mock_scores_one_and_degrades_with_noise(tmp_path):
 def test_gen_train_is_deterministic_and_hard_mode_makes_hard_cases(tmp_path):
     from ctag.gen_train import build
     a = build("procedural", 12, tmp_path / "a", seed=7, hard=True, write_audio=False, queries=True)
-    b = build("procedural", 12, tmp_path / "b", seed=7, hard=True, write_audio=False, workers=2)
+    build("procedural", 12, tmp_path / "b", seed=7, hard=True, write_audio=False, workers=2)
     ta = [json.loads(l) for l in open(tmp_path / "a" / "timelines.jsonl")]
     tb = [json.loads(l) for l in open(tmp_path / "b" / "timelines.jsonl")]
     assert [t["events"] for t in ta] == [t["events"] for t in tb]        # same seed -> same clips, any worker count
@@ -125,7 +125,7 @@ def test_gen_train_is_deterministic_and_hard_mode_makes_hard_cases(tmp_path):
     rows = [json.loads(l) for l in open(tmp_path / "a" / "benchmark.jsonl")]
     assert all(r["clip_id"].startswith("gen7_") for r in rows)
     # different seed -> different clips
-    c = build("procedural", 12, tmp_path / "c", seed=8, hard=True, write_audio=False)
+    build("procedural", 12, tmp_path / "c", seed=8, hard=True, write_audio=False)
     tc = [json.loads(l) for l in open(tmp_path / "c" / "timelines.jsonl")]
     assert [t["events"] for t in tc] != [t["events"] for t in ta]
 
