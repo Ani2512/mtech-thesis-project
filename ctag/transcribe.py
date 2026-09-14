@@ -85,7 +85,19 @@ def _event_from_obj(it) -> Event3 | None:
         a = next((_num(it[k]) for k in _START_KEYS if k in it and _num(it[k]) is not None), None)
         b = next((_num(it[k]) for k in _END_KEYS if k in it and _num(it[k]) is not None), None)
         if a is None or b is None:
-            return None
+            # {"sound": "dog", "time": [1.0, 2.0]} or {"dog": "1.0-2.0"}
+            for k, v in it.items():
+                if isinstance(v, (list, tuple)) and len(v) == 2 and _num(v[0]) is not None and _num(v[1]) is not None:
+                    a, b = _num(v[0]), _num(v[1]); break
+                if isinstance(v, str):
+                    mm = re.search(r"(\d+(?:\.\d+)?)\s*(?:-|–|to)\s*(\d+(?:\.\d+)?)", v)
+                    if mm:
+                        a, b = float(mm.group(1)), float(mm.group(2))
+                        if lab is None and k not in _LABEL_KEYS:
+                            lab = k
+                        break
+            if a is None or b is None:
+                return None
         return (_norm(lab) if lab is not None else "", a, b)
     if isinstance(it, (list, tuple)):
         if len(it) == 3 and isinstance(it[0], str) and _num(it[1]) is not None and _num(it[2]) is not None:
@@ -197,6 +209,12 @@ def summarize_timelines(rows: list[dict]) -> dict:
             label_n[lab] += tot
     dists = [d for r in rows for d in r.get("centre_errors", [])]
     durs = [r["duration_ratio"] for r in rows if r.get("duration_ratio") is not None]
+    # pooled over events, which is the number the phase 3 gate is set on: a
+    # clip-level mean over-weights clips with few events
+    tp = sum(label_tp.values()); n_pred = sum(r["n_pred"] for r in rows); n_gold = sum(label_n.values())
+    pp = tp / n_pred if n_pred else None
+    pr_ = tp / n_gold if n_gold else None
+    pf = (2 * pp * pr_ / (pp + pr_)) if pp is not None and pr_ is not None and (pp + pr_) else None
     return {
         "n_clips": len(rows),
         "parse_fail_rate": sum(r["parse_fail"] for r in rows) / n,
@@ -204,7 +222,7 @@ def summarize_timelines(rows: list[dict]) -> dict:
         "recall": float(np.mean([r["recall"] for r in rows])) if rows else None,
         "f1": float(np.mean([r["f1"] for r in rows])) if rows else None,
         "f1_any_label": float(np.mean([r["f1_any_label"] for r in rows])) if rows else None,
-        "event_recall_pooled": (sum(label_tp.values()) / sum(label_n.values())) if label_n else None,
+        "event_precision_pooled": pp, "event_recall_pooled": pr_, "event_f1_pooled": pf,
         "count_acc": sum(r["count_acc"] for r in rows) / n,
         "under_report_rate": sum(r["n_pred"] < r["n_gold"] for r in rows) / n,
         "centre_error_median": sorted(dists)[len(dists) // 2] if dists else None,

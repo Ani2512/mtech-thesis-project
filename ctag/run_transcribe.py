@@ -79,6 +79,9 @@ def mock_transcriber(gold: dict, jitter: float = 0.0, drop: float = 0.0, spuriou
 
 
 def model_transcriber(name: str, vocab: list[str] | None, **kw):
+    """`max_new_tokens` matters here: a ten-event timeline is ~250 tokens and the
+    backends default to 96, which would cut the list short and read as
+    under-reporting. main() sets it from --max-new-tokens (default 512)."""
     from .models import get_backend
 
     backend = get_backend(name, **kw)
@@ -97,6 +100,9 @@ def main(argv=None):
     ap.add_argument("--timelines", required=True, help="gold timelines.jsonl, for scoring")
     ap.add_argument("--out", required=True)
     ap.add_argument("--adapter", default=None, help="trained weights from ctag.train_lora")
+    ap.add_argument("--max-new-tokens", type=int, default=512,
+                    help="generation cap; a whole timeline needs far more than the 96 the query arms use")
+    ap.add_argument("--precision", default=None, choices=[None, "fp16", "8bit", "4bit"])
     ap.add_argument("--n", type=int, default=None, help="only the first n clips")
     ap.add_argument("--no-vocab-in-prompt", action="store_true")
     ap.add_argument("--iou", type=float, default=0.5)
@@ -113,7 +119,9 @@ def main(argv=None):
         t = mock_transcriber(gold, a.jitter, a.drop, a.spurious, a.relabel, a.seed)
         label = f"transcribe:mock(j={a.jitter},d={a.drop},s={a.spurious},r={a.relabel})"
     else:
-        kw = {}
+        kw = {"max_new_tokens": a.max_new_tokens}
+        if a.precision:
+            kw["precision"] = a.precision
         if a.adapter:
             if a.model != "qwen2.5-omni":
                 raise SystemExit("--adapter is only wired for the qwen2.5-omni backend")
@@ -142,7 +150,7 @@ def main(argv=None):
 
     summary = {"model": label, "bench": a.bench, "iou": a.iou, **summarize_timelines(rows)}
     (out / "summary.json").write_text(json.dumps(summary, indent=2), encoding="utf-8")
-    keys = ["n_clips", "precision", "recall", "f1", "f1_any_label", "count_acc", "under_report_rate",
+    keys = ["n_clips", "event_f1_pooled", "event_recall_pooled", "f1", "f1_any_label", "count_acc", "under_report_rate",
             "parse_fail_rate", "centre_error_median", "duration_ratio_median"]
     print("  ".join(f"{k}={summary[k]:.3f}" if isinstance(summary[k], float) else f"{k}={summary[k]}" for k in keys))
     worst = sorted(summary["recall_by_label"].items(), key=lambda kv: kv[1])[:5]

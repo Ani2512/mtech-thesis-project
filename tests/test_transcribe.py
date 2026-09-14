@@ -147,3 +147,56 @@ def test_compose_gap_bounds_are_respected():
     evs = tl.events
     gaps = [b.onset - a.offset for a, b in zip(evs, evs[1:])]
     assert gaps and all(0.1 - 1e-6 <= g <= 0.2 + 1e-6 for g in gaps)
+
+
+def test_parser_reads_a_dict_with_a_pair_value_and_a_label_key():
+    assert parse_timeline('[{"sound": "dog", "time": [1.0, 2.0]}]') == [("dog", 1.0, 2.0)]
+    assert parse_timeline("[{'dog': '1.0-2.0'}, {'siren': '3 to 4'}]") == [("dog", 1.0, 2.0), ("siren", 3.0, 4.0)]
+
+
+def test_summary_reports_pooled_event_metrics_not_only_clip_means():
+    # two clips: one with 1 event found, one with 9 of 10 found -> clip-mean recall 0.95, pooled 10/11
+    a = score_timeline([("dog", 1.0, 2.0)], [("dog", 1.0, 2.0)])
+    gold = [("dog", float(i), float(i) + 0.5) for i in range(10)]
+    b = score_timeline(gold[:9], gold)
+    s = summarize_timelines([a, b])
+    assert s["recall"] == pytest.approx(0.95)
+    assert s["event_recall_pooled"] == pytest.approx(10 / 11)
+    assert s["event_precision_pooled"] == 1.0 and s["event_f1_pooled"] == pytest.approx(2 * (10 / 11) / (1 + 10 / 11))
+
+
+def test_run_transcribe_raises_the_generation_cap_for_real_models(monkeypatch, tmp_path):
+    """A whole timeline is several hundred tokens; the 96-token default of the
+    query arms would truncate it and score as under-reporting."""
+    import ctag.run_transcribe as rt
+    seen = {}
+
+    class FakeBackend:
+        def ground(self, audio, q, query=None, duration=None):
+            return "[]"
+    import ctag.models as models
+    monkeypatch.setattr(models, "get_backend", lambda name, **kw: seen.update(kw) or FakeBackend())
+    out = _procedural(tmp_path, n=2)
+    rt.main(["--model", "qwen2.5-omni", "--bench", str(out / "benchmark.jsonl"),
+             "--timelines", str(out / "timelines.jsonl"), "--out", str(tmp_path / "o")])
+    assert seen["max_new_tokens"] == 512
+
+
+def test_gen_train_render_only_regenerates_identical_audio_from_timelines(tmp_path):
+    import soundfile as sf
+    from ctag.gen_train import build, render_only
+    build("procedural", 4, tmp_path / "g", seed=5, hard=True, write_audio=True)
+    ref = [sf.read(json.loads(l)["audio"])[0] for l in open(tmp_path / "g" / "timelines.jsonl")]
+    for p in (tmp_path / "g" / "audio").iterdir():
+        p.unlink()
+    assert render_only(tmp_path / "g", "procedural", workers=2) == 4
+    got = [sf.read(json.loads(l)["audio"])[0] for l in open(tmp_path / "g" / "timelines.jsonl")]
+    assert all((x == y).all() for x, y in zip(ref, got))
+    # a stored timeline that no longer matches the generator is refused
+    rows = [json.loads(l) for l in open(tmp_path / "g" / "timelines.jsonl")]
+    rows[0]["events"][0]["onset"] += 1.0
+    with open(tmp_path / "g" / "timelines.jsonl", "w") as f:
+        for r in rows:
+            f.write(json.dumps(r) + "\n")
+    with pytest.raises(RuntimeError):
+        render_only(tmp_path / "g", "procedural")

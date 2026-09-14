@@ -15,8 +15,9 @@ signal-to-noise. `--hard` draws every recipe knob per clip from a wide range.
 
 Every clip is a pure function of (seed, index): the same command regenerates
 the same audio, so timelines.jsonl is the durable artefact and audio can be
-re-rendered anywhere with --render-only. Clip ids are `gen<seed>_<i>` and never
-collide with the benchmark's `esc50_*`, so a split hash keeps them apart.
+re-rendered anywhere with `--render-only <dir>` (which also checks that the
+regenerated timeline equals the stored one). Clip ids are `gen<seed>_<i>` and
+never collide with the benchmark's `esc50_*`, so a split hash keeps them apart.
 """
 from __future__ import annotations
 
@@ -24,6 +25,7 @@ import argparse
 import hashlib
 import json
 import random
+import re
 from collections import Counter
 from multiprocessing import Pool
 from pathlib import Path
@@ -32,7 +34,6 @@ from .compose import SR, ESC50Bank, ProceduralBank, compose_clip
 from .queries import generate
 
 _BANK = None
-_ARGS = None
 
 
 def clip_seed(seed: int, i: int) -> int:
@@ -60,10 +61,14 @@ def draw_recipe(rng: random.Random, hard: bool, duration: float) -> dict:
     return rec
 
 
+def _make_bank(source: str, esc50_root: str | None, classes: list[str] | None):
+    rng = random.Random(0)
+    return ProceduralBank(rng) if source == "procedural" else ESC50Bank(Path(esc50_root), rng, classes)
+
+
 def _init(source: str, esc50_root: str | None, classes: list[str] | None):
     global _BANK
-    rng = random.Random(0)
-    _BANK = ProceduralBank(rng) if source == "procedural" else ESC50Bank(Path(esc50_root), rng, classes)
+    _BANK = _make_bank(source, esc50_root, classes)
 
 
 def _one(task: tuple) -> dict:
@@ -80,7 +85,7 @@ def _one(task: tuple) -> dict:
     wav = Path(out) / "audio" / f"{clip_id}.{ext}"
     if write_audio:
         sf.write(wav, audio, SR, subtype="PCM_16")
-    row = {"clip_id": clip_id, "audio": str(wav), "recipe": {**rec, "gap": list(rec["gap"])}, **tl.to_dict()}
+    row = {"clip_id": clip_id, "audio": str(wav), "hard": hard, "recipe": {**rec, "gap": list(rec["gap"])}, **tl.to_dict()}
     queries = []
     if want_queries:
         vocab = _BANK.labels()
@@ -96,20 +101,16 @@ def _one(task: tuple) -> dict:
 def stats(rows: list[dict]) -> dict:
     n = len(rows) or 1
     ev = [len(r["events"]) for r in rows]
-    overlaps = repeats = 0
+    overlaps = repeats = clips_ov = 0
     for r in rows:
         evs = sorted(r["events"], key=lambda e: e["onset"])
-        for a, b in zip(evs, evs[1:]):
-            if b["onset"] < a["offset"]:
-                overlaps += 1
-        c = Counter(e["label"] for e in evs)
-        repeats += sum(1 for v in c.values() if v >= 2)
+        k = sum(1 for a, b in zip(evs, evs[1:]) if b["onset"] < a["offset"])
+        overlaps += k
+        clips_ov += k > 0
+        repeats += sum(1 for v in Counter(e["label"] for e in evs).values() if v >= 2)
     labels = Counter(e["label"] for r in rows for e in r["events"])
     return {"clips": len(rows), "events_total": sum(ev), "events_per_clip_mean": round(sum(ev) / n, 2),
-            "clips_with_overlap": sum(1 for r in rows if any(
-                b["onset"] < a["offset"] for a, b in zip(sorted(r["events"], key=lambda e: e["onset"]),
-                                                          sorted(r["events"], key=lambda e: e["onset"])[1:]))),
-            "overlapping_pairs": overlaps, "repeated_labels": repeats,
+            "clips_with_overlap": clips_ov, "overlapping_pairs": overlaps, "repeated_labels": repeats,
             "label_counts": dict(sorted(labels.items()))}
 
 
@@ -120,6 +121,9 @@ def build(source: str, n_clips: int, out: Path, seed: int = 0, hard: bool = Fals
     out.mkdir(parents=True, exist_ok=True)
     if write_audio:
         (out / "audio").mkdir(exist_ok=True)
+    if source == "esc50":
+        esc50_root = esc50_root or out.parent / "esc50"
+        _make_bank(source, str(esc50_root), classes)   # download/index once, in the parent, not 8 times
     tasks = [(i, seed, hard, duration, str(out), fmt, write_audio, max_per_type, queries)
              for i in range(start, start + n_clips)]
     init_args = (source, str(esc50_root) if esc50_root else None, classes)
@@ -149,11 +153,42 @@ def build(source: str, n_clips: int, out: Path, seed: int = 0, hard: bool = Fals
     return s
 
 
+def render_only(out: Path, source: str, workers: int = 1, fmt: str = "wav",
+                esc50_root: Path | None = None, classes: list[str] | None = None) -> int:
+    """Regenerate the audio for every row of <out>/timelines.jsonl (made with
+    --no-audio, or copied to another machine). Raises if a regenerated timeline
+    differs from the stored one, which would mean a different bank or code."""
+    rows = [json.loads(l) for l in open(out / "timelines.jsonl", encoding="utf-8")]
+    (out / "audio").mkdir(exist_ok=True)
+    if source == "esc50":
+        esc50_root = esc50_root or out.parent / "esc50"
+        _make_bank(source, str(esc50_root), classes)
+    tasks = []
+    for r in rows:
+        m = re.fullmatch(r"gen(\d+)_(\d+)", r["clip_id"])
+        if not m:
+            raise ValueError(f"not a generated clip id: {r['clip_id']}")
+        tasks.append((int(m.group(2)), int(m.group(1)), bool(r["hard"]), r["duration"], str(out), fmt, True, 0, False))
+    init_args = (source, str(esc50_root) if esc50_root else None, classes)
+    if workers > 1:
+        with Pool(workers, initializer=_init, initargs=init_args) as pool:
+            results = list(pool.imap(_one, tasks, chunksize=8))
+    else:
+        _init(*init_args)
+        results = [_one(t) for t in tasks]
+    for r, got in zip(rows, results):
+        if got["timeline"]["events"] != r["events"]:
+            raise RuntimeError(f"{r['clip_id']}: regenerated timeline differs from the stored one")
+    return len(results)
+
+
 def main(argv=None):
     ap = argparse.ArgumentParser()
     ap.add_argument("--source", choices=["procedural", "esc50"], required=True)
-    ap.add_argument("--n-clips", type=int, required=True)
+    ap.add_argument("--n-clips", type=int, default=None)
     ap.add_argument("--out", required=True)
+    ap.add_argument("--render-only", action="store_true",
+                    help="regenerate audio for an existing <out>/timelines.jsonl and verify it")
     ap.add_argument("--seed", type=int, default=1)
     ap.add_argument("--start", type=int, default=0, help="first clip index (to extend a set in chunks)")
     ap.add_argument("--hard", action="store_true", help="wide, failure-mode-biased recipes")
@@ -166,6 +201,12 @@ def main(argv=None):
     ap.add_argument("--esc50-root", default=None)
     ap.add_argument("--classes", default=None, help="comma-separated ESC-50 classes (default: the benchmark's 14)")
     a = ap.parse_args(argv)
+    if a.render_only:
+        n = render_only(Path(a.out), a.source, a.workers, a.format,
+                        Path(a.esc50_root) if a.esc50_root else None, a.classes.split(",") if a.classes else None)
+        print(f"rendered and verified {n} clips"); return
+    if a.n_clips is None:
+        raise SystemExit("--n-clips is required unless --render-only")
     s = build(a.source, a.n_clips, Path(a.out), a.seed, a.hard, a.duration, a.workers, a.format,
               not a.no_audio, a.queries, a.max_per_type, Path(a.esc50_root) if a.esc50_root else None,
               a.classes.split(",") if a.classes else None, a.start)
