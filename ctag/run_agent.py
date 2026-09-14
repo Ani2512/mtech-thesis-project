@@ -9,6 +9,11 @@
 
     # real model as the grounder (needs a GPU)
     python -m ctag.run_agent --grounder qwen2.5-omni ...
+
+    # every query type answered in code from predicted whole-clip timelines
+    # (the output of ctag.run_transcribe); no model calls at all
+    python -m ctag.run_agent --grounder timeline --pred-timelines runs/esc50/transcribe/pred_timelines.jsonl \
+           --bench data/esc50/benchmark_test.jsonl --out runs/esc50/test_from_timeline
 """
 from __future__ import annotations
 
@@ -44,7 +49,10 @@ def main(argv=None):
     ap.add_argument("--bench", required=True)
     ap.add_argument("--timelines", default=None, help="required for --grounder oracle")
     ap.add_argument("--grounder", required=True,
-                    help="'oracle' or a model name from ctag.models")
+                    help="'oracle', 'timeline' (predicted timelines, see --pred-timelines) "
+                         "or a model name from ctag.models")
+    ap.add_argument("--pred-timelines", default=None,
+                    help="pred_timelines.jsonl from ctag.run_transcribe, for --grounder timeline")
     ap.add_argument("--jitter", type=float, default=0.0, help="+/- seconds of boundary noise")
     ap.add_argument("--drop", type=float, default=0.0, help="probability of missing an occurrence")
     ap.add_argument("--spurious", type=float, default=0.0, help="probability of a false detection")
@@ -64,6 +72,15 @@ def main(argv=None):
             tl[d["clip_id"]] = d
         g = oracle_grounder(tl)
         label = "agent:oracle"
+    elif a.grounder == "timeline":
+        from .transcribe import timeline_grounder
+        assert a.pred_timelines, "--pred-timelines is required for the timeline grounder"
+        preds = {}
+        for line in open(a.pred_timelines, encoding="utf-8"):
+            d = json.loads(line)
+            preds[d["clip_id"]] = d
+        g = timeline_grounder(preds)
+        label = "agent:timeline"
     else:
         kw = {}
         if a.adapter:

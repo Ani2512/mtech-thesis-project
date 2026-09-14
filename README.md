@@ -83,6 +83,25 @@ decompose 0.218, LM-only QLoRA 0.530, QLoRA grounder inside the decomposition
 Write-ups: `docs/results_kaggle_v4.md`, `docs/results_kaggle_v5.md`,
 `docs/results_kaggle_v6.md`.
 
+## Phase 3: whole-timeline transcription
+
+One answer per clip (every event with start and end), every query type computed
+in code from it. See `docs/timeline_transcription.md`.
+
+```bash
+# training set: one whole-timeline target per training clip
+python -m ctag.sft_data --task transcribe --timelines data/esc50/timelines.jsonl \
+       --bench data/esc50/benchmark_train.jsonl --out data/esc50/sft_transcribe.jsonl
+# a large composed set with hard cases (overlaps, repeats, short gaps, low SNR)
+python -m ctag.gen_train --source esc50 --n-clips 20000 --hard --workers 8 \
+       --out data/gen_esc50 --esc50-root data/esc50_raw
+# transcribe + score clips, then answer the benchmark from the predictions
+python -m ctag.run_transcribe --model qwen2.5-omni --adapter runs/lora_transcribe \
+       --bench data/esc50/benchmark_test.jsonl --timelines data/esc50/timelines.jsonl --out runs/esc50/transcribe
+python -m ctag.run_agent --grounder timeline --pred-timelines runs/esc50/transcribe/pred_timelines.jsonl \
+       --bench data/esc50/benchmark_test.jsonl --out runs/esc50/test_from_timeline
+```
+
 ## Running it
 
 `phase1_kaggle.ipynb` is the recommended path. Kaggle gives 30 GPU hours a week
