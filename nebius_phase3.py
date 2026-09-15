@@ -143,6 +143,15 @@ for split, tag in ((VAL, "val"), (TEST, "test")):
         py + ["ctag.run_agent", "--grounder", "timeline", "--pred-timelines", f"runs/esc50/transcribe_{tag}/pred_timelines.jsonl",
               "--bench", split, "--out", f"runs/esc50/{tag}_from_timeline"],
         f"runs/esc50/{tag}_from_timeline/summary.json")
+    # boundary refinement: the signal decides the exact edges (ctag.refine)
+    run(f"refine the {tag} timelines against the audio",
+        py + ["ctag.refine", "--pred-timelines", f"runs/esc50/transcribe_{tag}/pred_timelines.jsonl",
+              "--timelines", f"{BENCH}/timelines.jsonl", "--out", f"runs/esc50/transcribe_{tag}_refined"],
+        f"runs/esc50/transcribe_{tag}_refined/summary.json")
+    run(f"every query type from the refined {tag} timelines",
+        py + ["ctag.run_agent", "--grounder", "timeline", "--pred-timelines", f"runs/esc50/transcribe_{tag}_refined/pred_timelines.jsonl",
+              "--bench", split, "--out", f"runs/esc50/{tag}_from_timeline_refined"],
+        f"runs/esc50/{tag}_from_timeline_refined/summary.json")
 
 # the same adapter asked the phase 2 way, for a like-for-like reference row
 run("direct prompting with the transcription adapter (reference)",
@@ -205,6 +214,11 @@ if t:
     print(f"test  event F1 (pooled) {num(t.get('event_f1_pooled'))}  under-report {num(t.get('under_report_rate'))}  "
           f"duration ratio {num(t.get('duration_ratio_median'))}")
     print("      lowest recall by sound:", ", ".join(f"{k} {x:.2f}" for k, x in sorted(t["recall_by_label"].items(), key=lambda kv: kv[1])[:4]))
+r = load("runs/esc50/transcribe_test_refined/summary.json")
+if r and "after" in r:
+    print(f"test  refined: event F1 {num(r['before']['event_f1_pooled'])} -> {num(r['after']['event_f1_pooled'])}  "
+          f"duration ratio {num(r['before']['duration_ratio_median'])} -> {num(r['after']['duration_ratio_median'])}  "
+          f"edges moved {r['edges_moved']}")
 types = ["PLAIN", "ORDINAL", "AFTER", "BEFORE", "NEXT_AFTER", "WHILE", "NOT_FOLLOWED", "ALL"]
 if q:
     print("test  f1@0.5 from the timeline: " + "  ".join(f"{ty} {q['by_type'][ty]['f1@0.5']:.3f}" for ty in types if ty in q["by_type"]))
