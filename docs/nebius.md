@@ -73,9 +73,17 @@ zero), `--time-rows full` (both tables trainable; ~16 GB extra, fine on 48 GB),
 be won by default). The table at the end prints both arms side by side with
 their empty-answer rate. Roughly the cost of the transcription run again.
 
+## Boundary refinement (in the runner)
+
+`ctag.refine` snaps each predicted edge to the nearest energy rise or fall
+within 0.5 s, keeping the model's *what* and *where* and letting the signal
+decide *exactly when*. The runner scores the test timelines before and after
+(`transcribe_test_refined/summary.json`) and answers every query type from
+both, so the table shows whether it helps on real predictions. On procedural
+clips it recovers most of a 0.3-0.5 s edge error and costs about a point on
+exact edges where an impulsive sound overlaps a continuous one.
+
 ## Not in this runner yet
 
-- Boundary refinement against signal energy: a post-processor on
-  `pred_timelines.jsonl`, to be scored with `run_transcribe`'s metrics.
 - The real-recording set (`ctag.real_data`): evaluate the same adapter on it
   with `run_transcribe --timelines data/desed/timelines.jsonl` once verified.
