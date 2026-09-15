@@ -65,7 +65,7 @@ def _fit_plan(param_billions: float = 8.4, override: str | None = None) -> tuple
     """Returns (label, kwargs for from_pretrained)."""
     import torch
 
-    if override in ("fp16", "8bit", "4bit"):
+    if override in ("fp16", "bf16", "8bit", "4bit"):
         choice = override
     else:
         total = (torch.cuda.get_device_properties(0).total_memory / 1024 ** 3
@@ -76,6 +76,11 @@ def _fit_plan(param_billions: float = 8.4, override: str | None = None) -> tuple
         return "cpu (no GPU visible - this will be very slow)", {"dtype": torch.float32}
     if choice == "fp16":
         return "fp16", {"dtype": torch.float16, "device_map": "auto"}
+    if choice == "bf16":
+        # Full-precision weights on a card with native bf16 (Ampere+, e.g. L40S):
+        # no quantisation error, no dequantisation in every forward, bf16's
+        # fp32 range so no overflow. The 7B thinker is ~17 GB this way.
+        return "bf16", {"dtype": torch.bfloat16, "device_map": "auto"}
 
     from transformers import BitsAndBytesConfig
 

@@ -21,7 +21,7 @@ def main(argv=None):
     ap.add_argument("--out", required=True)
     ap.add_argument("--n", type=int, default=None)
     ap.add_argument("--types", default=None, help="comma-separated subset of condition types")
-    ap.add_argument("--precision", default=None, choices=["fp16", "8bit", "4bit"],
+    ap.add_argument("--precision", default=None, choices=["fp16", "bf16", "8bit", "4bit"],
                     help="override the automatic fit (default: pick from GPU memory)")
     ap.add_argument("--max-new-tokens", type=int, default=96,
                     help="an interval list is short; 96 is ample and keeps decoding fast")

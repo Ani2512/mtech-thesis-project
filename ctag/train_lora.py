@@ -133,6 +133,12 @@ class GroundingCollator:
 # target_modules is a string.
 LM_TARGET_MODULES = (r"model\.layers\.\d+\."
                      r"(self_attn\.(q|k|v|o)_proj|mlp\.(gate|up|down)_proj)")
+# The audio encoder (Whisper-style: q/k/v/out_proj attention, fc1/fc2 MLP), for
+# --train-encoder. The vision tower stays out in every configuration: nothing
+# in this task is visual and its 192 tensors were pure waste in the v4 adapter.
+AUDIO_TARGET_MODULES = (r"audio_tower\.layers\.\d+\."
+                        r"(self_attn\.(q|k|v|out)_proj|fc1|fc2)")
+LM_AND_AUDIO_TARGET_MODULES = f"(?:{LM_TARGET_MODULES})|(?:{AUDIO_TARGET_MODULES})"
 
 
 def lora_targets_by_subtree(model) -> dict[str, int]:
@@ -150,7 +156,7 @@ def lora_targets_by_subtree(model) -> dict[str, int]:
 
 def build_model(model_id: str, precision: str | None, lora_r: int, lora_alpha: int,
                 lora_dropout: float, time_tokens: bool = False, max_seconds: float = 30.0,
-                resolution: float = 0.1):
+                resolution: float = 0.1, train_encoder: bool = False):
     import torch
     from peft import LoraConfig, get_peft_model, prepare_model_for_kbit_training
     from transformers import Qwen2_5OmniProcessor, Qwen2_5OmniThinkerForConditionalGeneration
@@ -185,6 +191,11 @@ def build_model(model_id: str, precision: str | None, lora_r: int, lora_alpha: i
 
     if "4bit" in label or "8bit" in label:
         model = prepare_model_for_kbit_training(model, use_gradient_checkpointing=True)
+    else:
+        # prepare_model_for_kbit_training does this for quantised loads; with
+        # full-precision weights and gradient checkpointing the LoRA inputs
+        # would otherwise carry no grad and every step would be a no-op.
+        model.enable_input_require_grads()
     model.config.use_cache = False
 
     cfg = LoraConfig(
@@ -202,7 +213,7 @@ def build_model(model_id: str, precision: str | None, lora_r: int, lora_alpha: i
         # the 392 language-model ones -- the "frozen encoder" was not frozen.
         # That adapter is kept as its own arm (lora_text_enc) rather than
         # passed off as this one.
-        target_modules=LM_TARGET_MODULES,
+        target_modules=LM_AND_AUDIO_TARGET_MODULES if train_encoder else LM_TARGET_MODULES,
         # Not modules_to_save=["embed_tokens", "lm_head"]: that makes both full
         # 152,064 x 3,584 matrices trainable, about 16 GiB of weights, gradients
         # and Adam state, which is why arm E died on a T4 inside a minute. The
@@ -219,10 +230,10 @@ def build_model(model_id: str, precision: str | None, lora_r: int, lora_alpha: i
 
     where = lora_targets_by_subtree(model)
     print(f"[train] LoRA tensors per subtree: {where}")
-    leaked = {k: v for k, v in where.items() if k != "model"}
-    if leaked or not where:
-        raise RuntimeError(f"LoRA must attach to the language model only, got {where}; "
-                           "the encoders would be trained on ~200 clips")
+    allowed = {"model", "audio_tower"} if train_encoder else {"model"}
+    leaked = {k: v for k, v in where.items() if k not in allowed}
+    if leaked or "model" not in where or (train_encoder and "audio_tower" not in where):
+        raise RuntimeError(f"LoRA must attach to {sorted(allowed)} only, got {where}")
 
     if time_tokens:
         # get_peft_model freezes everything it does not own, the deltas included.
@@ -385,7 +396,11 @@ def main(argv=None):
     ap.add_argument("--lora-r", type=int, default=32)
     ap.add_argument("--lora-alpha", type=int, default=64)
     ap.add_argument("--lora-dropout", type=float, default=0.05)
-    ap.add_argument("--precision", default=None, choices=["fp16", "8bit", "4bit"])
+    ap.add_argument("--precision", default=None, choices=["fp16", "bf16", "8bit", "4bit"],
+                    help="bf16 = full-precision weights, for cards with native bf16 and >= 24 GB")
+    ap.add_argument("--train-encoder", action="store_true",
+                    help="also attach LoRA to the audio encoder (C-enc was worth ~+0.02 on 2,300 "
+                         "examples; with tens of thousands it may matter more). Never the vision tower.")
     ap.add_argument("--amp", default="none", choices=["none", "fp16", "bf16", "auto"],
                     help="mixed precision. 'none' keeps gradients in fp32, which avoids the "
                          "fp16 overflow that produces nan grad_norm without paying for "
@@ -431,7 +446,7 @@ def main(argv=None):
           + ("  (emulated on pre-Ampere cards, ~5x slower)" if bf16 and not _bf16_ok() else ""))
     model, processor, vocab = build_model(a.model_id, a.precision, a.lora_r, a.lora_alpha,
                                           a.lora_dropout, a.time_tokens, a.max_seconds,
-                                          a.resolution)
+                                          a.resolution, a.train_encoder)
     collate = GroundingCollator(processor, max_seq_len=(a.max_seq_len or None))
 
     optim = a.optim

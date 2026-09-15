@@ -102,7 +102,7 @@ def main(argv=None):
     ap.add_argument("--adapter", default=None, help="trained weights from ctag.train_lora")
     ap.add_argument("--max-new-tokens", type=int, default=512,
                     help="generation cap; a whole timeline needs far more than the 96 the query arms use")
-    ap.add_argument("--precision", default=None, choices=[None, "fp16", "8bit", "4bit"])
+    ap.add_argument("--precision", default=None, choices=["fp16", "bf16", "8bit", "4bit"])
     ap.add_argument("--n", type=int, default=None, help="only the first n clips")
     ap.add_argument("--no-vocab-in-prompt", action="store_true")
     ap.add_argument("--iou", type=float, default=0.5)
