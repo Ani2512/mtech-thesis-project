@@ -43,6 +43,14 @@ def _bf16_ok() -> bool:
         return False
 
 
+def _cuda() -> bool:
+    try:
+        import torch
+        return torch.cuda.is_available()
+    except Exception:
+        return False
+
+
 def load_examples(path: Path) -> list[dict]:
     return [json.loads(l) for l in open(path, encoding="utf-8")]
 
@@ -359,6 +367,8 @@ def _make_time_trainer():
             self._lam = float(lam)
             self._time_seen = 0
             self._none_id = tokenizer.convert_tokens_to_ids(EMPTY_TOKEN)
+            if self._none_id is None or self._none_id < 0:
+                raise ValueError(f"{EMPTY_TOKEN} is missing from the tokenizer")
             self._none_weight = float(none_weight)
 
         def compute_loss(self, model, inputs, return_outputs=False, **kw):
@@ -378,6 +388,17 @@ def _make_time_trainer():
             return (loss, outputs) if return_outputs else loss
 
     return TimeAwareTrainer
+
+
+def warmup_steps(n_examples: int, batch_size: int, grad_accum: int, epochs: float, max_steps: int,
+                 ratio: float = 0.03) -> int:
+    """warmup_ratio was removed from TrainingArguments in transformers 5.2 (the
+    Kaggle image only warned); give the Trainer a step count instead."""
+    import math
+
+    per_epoch = max(1, math.ceil(n_examples / max(1, batch_size * grad_accum)))
+    total = max_steps if max_steps and max_steps > 0 else math.ceil(per_epoch * epochs)
+    return max(1, int(round(ratio * total)))
 
 
 def _preflight(model, collate, examples, a):
@@ -467,8 +488,9 @@ def main(argv=None):
     ap.add_argument("--time-lambda", type=float, default=0.5,
                     help="TEMPO uses 0.5")
     ap.add_argument("--head-init", choices=["zero", "bpe"], default="zero",
-                    help="output-head rows for the new tokens: zero (phase 2) or the mean of "
-                         "their BPE pieces, like the input rows (arm E retest)")
+                    help="output-head rows for the new tokens: zero (phase 2, delta rows only) or the "
+                         "mean of their BPE pieces, like the input rows (arm E retest; with --time-rows "
+                         "full this is the only initialisation that is applied)")
     ap.add_argument("--none-weight", type=float, default=1.0,
                     help="loss weight on the <t=none> target; < 1 stops the head from winning by "
                          "saying 'none' (arm E answered it on 513/699 test queries)")
@@ -525,7 +547,7 @@ def main(argv=None):
         gradient_accumulation_steps=a.grad_accum,
         learning_rate=a.lr,
         lr_scheduler_type="cosine",
-        warmup_ratio=0.03,
+        warmup_steps=warmup_steps(len(train), a.batch_size, a.grad_accum, a.epochs, a.max_steps),
         logging_steps=10,
         save_strategy="epoch",
         eval_strategy="epoch" if val else "no",
@@ -540,7 +562,11 @@ def main(argv=None):
         optim=optim,
         report_to=[],
         remove_unused_columns=False,
-        dataloader_num_workers=2,
+        # Without CUDA the Trainer would pick Apple's MPS backend, where bf16
+        # crashes, and forked loader workers segfault on macOS: stay on CPU and
+        # load in-process there. On a CUDA machine both settings are unchanged.
+        use_cpu=not _cuda(),
+        dataloader_num_workers=2 if _cuda() else 0,
     )
     if a.time_tokens:
         trainer = _make_time_trainer()(model=model, args=args, train_dataset=train,

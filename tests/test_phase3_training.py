@@ -46,3 +46,48 @@ def test_phase3_runner_compiles_and_documents_its_knobs():
     for knob in ("CTAG_GEN_N", "CTAG_EPOCHS", "CTAG_PRECISION", "CTAG_TRAIN_ENC", "CTAG_SMOKE"):
         assert knob in src
     assert "event_f1_pooled" in src and "--grounder" in src and "timeline" in src
+
+
+def test_every_runner_command_is_accepted_by_its_module():
+    """Every flag and every choice value the Nebius runner passes must exist in
+    the module it calls. An argparse error after an hour of generation is the
+    kind of mistake that costs GPU money; this catches it on CPU."""
+    import json
+    import os
+    import re
+
+    env = {**os.environ, "CTAG_DRY_RUN": "1", "CTAG_ARM_E": "1"}
+    out = subprocess.run([sys.executable, "nebius_phase3.py"], capture_output=True, text=True, env=env)
+    assert out.returncode == 0, out.stderr[-2000:]
+    cmds = [json.loads(l[4:]) for l in out.stdout.splitlines() if l.startswith("DRY ")]
+    assert len(cmds) >= 15, out.stdout
+    helps = {}
+    for cmd in cmds:
+        module = cmd[2]
+        if module not in helps:
+            h = subprocess.run([sys.executable, "-m", module, "--help"], capture_output=True, text=True)
+            assert h.returncode == 0, (module, h.stderr[-500:])
+            helps[module] = h.stdout
+        text = helps[module]
+        flags = [t for t in cmd[3:] if t.startswith("--")]
+        for f in flags:
+            assert re.search(rf"(^|\s){re.escape(f)}(\s|,|$)", text), f"{module} does not accept {f}"
+        # choice values: '--flag {a,b,c}' in the help text
+        for f, v in zip(cmd[3:], cmd[4:]):
+            if f.startswith("--") and not v.startswith("--"):
+                m = re.search(rf"{re.escape(f)} \{{([^}}]+)\}}", text)
+                if m:
+                    assert v in m.group(1).split(","), f"{module} {f}: {v!r} not in {{{m.group(1)}}}"
+    modules = {c[2] for c in cmds}
+    assert {"ctag.build_benchmark", "ctag.split", "ctag.gen_train", "ctag.sft_data", "ctag.train_lora",
+            "ctag.run_transcribe", "ctag.run_agent", "ctag.run_zeroshot"} <= modules
+
+
+def test_warmup_is_a_step_count_not_a_ratio():
+    """transformers 5.2 removed warmup_ratio; the Kaggle image only warned about
+    it, a fresh install on the VM raises TypeError at TrainingArguments."""
+    from ctag.train_lora import warmup_steps
+    assert warmup_steps(20000, 2, 4, 3.0, -1) == round(0.03 * 2500 * 3)
+    assert warmup_steps(4, 1, 1, 1.0, 2) == 1            # a 2-step smoke test still warms up
+    src = open("ctag/train_lora.py").read()
+    assert "warmup_ratio=" not in src

@@ -24,6 +24,7 @@ Knobs (environment variables, all optional):
     CTAG_ARM_E_ROWS  delta | full   how the new symbol rows are trained          (full)
     CTAG_WORKERS     generator processes                  (cpu count)
     CTAG_RESULTS     where finished runs are copied       (~/phase3_results)
+    CTAG_DRY_RUN     1 to print every command and run nothing (tests validate the flags)
 
 Order: benchmark (if missing) -> generated set -> SFT files -> 20-step smoke
 train -> full train -> transcribe val (the 0.95 gate) and test -> every query
@@ -54,6 +55,7 @@ ARM_E_N = os.environ.get("CTAG_ARM_E_N", "20000")
 ARM_E_ROWS = os.environ.get("CTAG_ARM_E_ROWS", "full")
 WORKERS = os.environ.get("CTAG_WORKERS", str(max(1, (os.cpu_count() or 2) - 1)))
 RESULTS = os.path.expanduser(os.environ.get("CTAG_RESULTS", "~/phase3_results"))
+DRY_RUN = os.environ.get("CTAG_DRY_RUN", "0") == "1"
 
 BENCH = "data/esc50"
 GEN = "data/gen_esc50"
@@ -65,8 +67,10 @@ print(f"[phase3] gen={GEN_N} epochs={EPOCHS} bs={BS} accum={ACCUM} lr={LR} preci
 
 
 def persist():
+    if DRY_RUN:
+        return
     os.makedirs(RESULTS, exist_ok=True)
-    for src in ("runs/esc50", ADAPTER, "logs"):
+    for src in ("runs/esc50", ADAPTER, "runs/lora_q_text", "runs/lora_q_tt", "logs"):
         if os.path.isdir(src):
             dst = os.path.join(RESULTS, os.path.basename(src))
             shutil.rmtree(dst, ignore_errors=True)
@@ -74,6 +78,9 @@ def persist():
 
 
 def run(label, cmd, produces):
+    if DRY_RUN:
+        print("DRY " + json.dumps(cmd), flush=True)
+        return True
     if produces and os.path.exists(produces):
         print(f"\n=== {label}: already done ===", flush=True)
         return True
@@ -119,7 +126,7 @@ ok &= run("smoke train (20 steps)", py + train_common + ["--out", "runs/lora_smo
           "runs/lora_smoke/adapter_config.json")
 if not ok:
     raise SystemExit("the smoke test failed; fix before spending hours")
-if SMOKE_ONLY:
+if SMOKE_ONLY and not DRY_RUN:
     raise SystemExit("CTAG_SMOKE=1: stopping after the smoke test")
 ok &= run(f"train transcription ({EPOCHS} epochs)", py + train_common + ["--out", ADAPTER, "--epochs", EPOCHS],
           f"{ADAPTER}/adapter_config.json")
@@ -187,13 +194,16 @@ v = load("runs/esc50/transcribe_val/summary.json")
 t = load("runs/esc50/transcribe_test/summary.json")
 q = load("runs/esc50/test_from_timeline/summary.json")
 print("\n================ phase 3 ================")
+def num(x):
+    return f"{x:.3f}" if isinstance(x, (int, float)) else "n/a"
+
 if v:
     f1 = v.get("event_f1_pooled")
-    print(f"val   event F1 (pooled) {f1:.3f}  recall {v['event_recall_pooled']:.3f}  "
-          f"precision {v['event_precision_pooled']:.3f}   GATE 0.95: {'PASS' if f1 and f1 >= 0.95 else 'not yet'}")
+    print(f"val   event F1 (pooled) {num(f1)}  recall {num(v.get('event_recall_pooled'))}  "
+          f"precision {num(v.get('event_precision_pooled'))}   GATE 0.95: {'PASS' if f1 and f1 >= 0.95 else 'not yet'}")
 if t:
-    print(f"test  event F1 (pooled) {t['event_f1_pooled']:.3f}  under-report {t['under_report_rate']:.3f}  "
-          f"duration ratio {t['duration_ratio_median']}")
+    print(f"test  event F1 (pooled) {num(t.get('event_f1_pooled'))}  under-report {num(t.get('under_report_rate'))}  "
+          f"duration ratio {num(t.get('duration_ratio_median'))}")
     print("      lowest recall by sound:", ", ".join(f"{k} {x:.2f}" for k, x in sorted(t["recall_by_label"].items(), key=lambda kv: kv[1])[:4]))
 types = ["PLAIN", "ORDINAL", "AFTER", "BEFORE", "NEXT_AFTER", "WHILE", "NOT_FOLLOWED", "ALL"]
 if q:

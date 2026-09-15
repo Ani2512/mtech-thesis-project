@@ -21,11 +21,13 @@ sudo apt-get install -y git ffmpeg libsndfile1
 git clone https://github.com/Ani2512/mtech-thesis-project.git && cd mtech-thesis-project
 python3 -m venv .venv && source .venv/bin/activate
 pip install --upgrade pip
-pip install torch --index-url https://download.pytorch.org/whl/cu124
-pip install -r requirements.txt "transformers>=4.52" accelerate peft librosa qwen-omni-utils
+pip install torch torchvision --index-url https://download.pytorch.org/whl/cu124   # torchvision: the Omni processor imports it
+pip install -r requirements.txt "transformers>=4.52" accelerate peft librosa audioread qwen-omni-utils
+# audioread: qwen-omni-utils imports it for audio loading but does not declare it (found by the dry run)
 pip uninstall -y torchao 2>/dev/null   # peft's dispatcher trips on old torchao builds
 export HF_HOME=$PWD/hf_cache            # keep the 20 GB model out of $HOME quotas
-python -m pytest tests -q               # 70+ tests, CPU only, ~10 s
+python -m pytest tests -q               # 80+ tests, CPU only, ~10 s
+python scripts/dry_run_gpu_paths.py     # every GPU code path on a tiny random model, CPU, a few minutes
 ```
 
 ESC-50 downloads once (~600 MB) on the first `build_benchmark`/`gen_train`.

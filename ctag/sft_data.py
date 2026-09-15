@@ -187,7 +187,8 @@ def build(bench: Path, timelines: Path, out: Path, plain_ratio: float = 0.5,
         if max_examples is not None and len(chosen) > max_examples:
             # subsample each pool in proportion, so the cap survives the subsample
             n_e = min(len(empties), int(round(max_examples * len(empties) / len(chosen))))
-            chosen = rng.sample(rest, max_examples - n_e) + rng.sample(empties, n_e)
+            n_r = min(len(rest), max_examples - n_e)
+            chosen = rng.sample(rest, n_r) + rng.sample(empties, n_e)
     elif max_examples is not None and len(chosen) > max_examples:
         chosen = rng.sample(chosen, max_examples)
     rng.shuffle(chosen)
