@@ -213,20 +213,29 @@ def _new_rows_modules():
 
     class NewRowsLinear(nn.Module):
         """Frozen base projection, with the tail logits supplied by a trainable
-        delta. The base rows for the new tokens are zeroed at construction, so
-        the new-token logits are learned rather than fighting a random init."""
+        delta on top of the base rows.
 
-        def __init__(self, base: nn.Linear, base_size: int):
+        zero_rows=True (phase 2): the base rows for the new tokens are zeroed, so
+        every timestamp token starts with the same logit and the delta learns the
+        whole output space from nothing. On one T4 epoch that space was learned
+        only for the single most frequent target, `<t=none>`, and arm E collapsed
+        onto it. zero_rows=False keeps whatever the caller put in those rows
+        (TEMPO's mean-of-BPE init, written by TimeVocab.init_embeddings on the
+        head as well as the embedding), so the tokens start out ordered by their
+        digits on the output side too."""
+
+        def __init__(self, base: nn.Linear, base_size: int, zero_rows: bool = True):
             super().__init__()
             self.base = base
             self.base_size = int(base_size)
             n_new = base.out_features - self.base_size
             if n_new <= 0:
                 raise ValueError(f"no new rows: {base.out_features} <= {base_size}")
-            with torch.no_grad():
-                base.weight[self.base_size:].zero_()
-                if base.bias is not None:
-                    base.bias[self.base_size:].zero_()
+            if zero_rows:
+                with torch.no_grad():
+                    base.weight[self.base_size:].zero_()
+                    if base.bias is not None:
+                        base.bias[self.base_size:].zero_()
             self.delta = nn.Parameter(
                 torch.zeros(n_new, base.in_features, dtype=torch.float32,
                             device=base.weight.device))
@@ -246,7 +255,7 @@ def _new_rows_modules():
 DELTA_FILE = "time_deltas.pt"
 
 
-def wrap_new_rows(thinker, base_size: int):
+def wrap_new_rows(thinker, base_size: int, zero_head_rows: bool = True):
     """Swap in the trainable-tail wrappers. Returns the two new modules."""
     NewRowsEmbedding, NewRowsLinear = _new_rows_modules()
     emb = thinker.get_input_embeddings()
@@ -254,7 +263,7 @@ def wrap_new_rows(thinker, base_size: int):
     if head is None:
         raise RuntimeError("no output embedding to wrap; cannot train timestamp tokens")
     wrapped_emb = NewRowsEmbedding(emb, base_size)
-    wrapped_head = NewRowsLinear(head, base_size)
+    wrapped_head = NewRowsLinear(head, base_size, zero_rows=zero_head_rows)
     thinker.set_input_embeddings(wrapped_emb)
     thinker.set_output_embeddings(wrapped_head)
     return wrapped_emb, wrapped_head
@@ -281,6 +290,8 @@ def save_deltas(model, out_dir):
             # (mean_resizing=True), not from TEMPO's mean-of-BPE init the
             # training used. Save the rows the delta was trained against
             # (about 4 MB) so inference adds the delta to the same base.
+            # For the head this is either zeros (phase 2) or the mean-of-BPE rows
+            # (--head-init bpe); either way the load must put back exactly these.
             found[key]["base_rows"] = mod.base.weight[mod.base_size:].detach().float().cpu()
     if not found:
         return None
@@ -321,7 +332,10 @@ def load_deltas(thinker, adapter_dir, tokenizer=None):
         return False
     blob = torch.load(path, map_location="cpu")
     base_size = next(iter(blob.values()))["base_size"]
-    emb, head = wrap_new_rows(thinker, base_size)
+    # zero_head_rows only when the file predates saved head rows: a newer file
+    # restores the exact rows below, whatever they were at training time.
+    emb, head = wrap_new_rows(thinker, base_size,
+                              zero_head_rows="base_rows" not in blob.get("lm_head", {}))
     how = "no embedding delta in the file"
     with torch.no_grad():
         if "embedding" in blob:
@@ -341,6 +355,8 @@ def load_deltas(thinker, adapter_dir, tokenizer=None):
                     "the delta would sit on random rows and the eval would be meaningless")
             emb.delta.copy_(e["delta"].to(emb.delta.dtype))
         if "lm_head" in blob:
+            if "base_rows" in blob["lm_head"]:
+                head.base.weight[base_size:].copy_(blob["lm_head"]["base_rows"].to(head.base.weight.dtype))
             head.delta.copy_(blob["lm_head"]["delta"].to(head.delta.dtype))
     print(f"[qwen2.5-omni] loaded timestamp deltas from {path} ({how})")
     return True

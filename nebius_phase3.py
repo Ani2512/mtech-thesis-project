@@ -18,6 +18,10 @@ Knobs (environment variables, all optional):
     CTAG_PRECISION   bf16 | fp16 | 4bit                   (bf16)
     CTAG_TRAIN_ENC   1 to also train the audio encoder    (1)
     CTAG_SMOKE       1 to stop after the 20-step smoke test
+    CTAG_ARM_E       1 to also run the arm E retest: text digits vs time symbols
+                     on the same generated questions, same epochs, same card    (1)
+    CTAG_ARM_E_N     question examples for that comparison                        (20000)
+    CTAG_ARM_E_ROWS  delta | full   how the new symbol rows are trained          (full)
     CTAG_WORKERS     generator processes                  (cpu count)
     CTAG_RESULTS     where finished runs are copied       (~/phase3_results)
 
@@ -45,6 +49,9 @@ LR = os.environ.get("CTAG_LR", "1e-4")
 PRECISION = os.environ.get("CTAG_PRECISION", "bf16")
 TRAIN_ENC = os.environ.get("CTAG_TRAIN_ENC", "1") == "1"
 SMOKE_ONLY = os.environ.get("CTAG_SMOKE", "0") == "1"
+ARM_E = os.environ.get("CTAG_ARM_E", "1") == "1"
+ARM_E_N = os.environ.get("CTAG_ARM_E_N", "20000")
+ARM_E_ROWS = os.environ.get("CTAG_ARM_E_ROWS", "full")
 WORKERS = os.environ.get("CTAG_WORKERS", str(max(1, (os.cpu_count() or 2) - 1)))
 RESULTS = os.path.expanduser(os.environ.get("CTAG_RESULTS", "~/phase3_results"))
 
@@ -91,7 +98,7 @@ ok &= run("split", py + ["ctag.split", "--bench", f"{BENCH}/benchmark.jsonl", "-
 # ---------------------------------------------------------------- 2. generated set
 ok &= run(f"generate {GEN_N} hard clips",
           py + ["ctag.gen_train", "--source", "esc50", "--n-clips", GEN_N, "--hard", "--workers", WORKERS,
-                "--out", GEN, "--esc50-root", "data/esc50_raw"], f"{GEN}/gen_stats.json")
+                "--queries", "--out", GEN, "--esc50-root", "data/esc50_raw"], f"{GEN}/gen_stats.json")
 
 # ---------------------------------------------------------------- 3. SFT files
 ok &= run("SFT: transcription targets for the generated set",
@@ -136,6 +143,39 @@ run("direct prompting with the transcription adapter (reference)",
           "--bench", TEST, "--out", "runs/esc50/test_direct_transcribe_adapter"],
     "runs/esc50/test_direct_transcribe_adapter/summary.json")
 
+# ---------------------------------------------------------------- 5b. arm E retest
+# Phase 2's arm E (time symbols) lost to text digits, 0.194 vs 0.530, but it was
+# trained on a T4: one 4-bit epoch, zeroed output rows, a delta on 302 rows,
+# <t=none> unweighted. Here both representations get the same generated
+# questions, the same epochs and the same card, and the symbols get TEMPO's
+# configuration: mean-of-BPE rows on the head too, the full tables trainable,
+# the empty answer capped in the data and down-weighted in the loss.
+if ARM_E:
+    qcommon = ["ctag.sft_data", "--task", "queries", "--timelines", f"{GEN}/timelines.jsonl",
+               "--bench", f"{GEN}/benchmark.jsonl", "--plain-ratio", "0.6", "--max-empty-share", "0.15",
+               "--max-examples", ARM_E_N]
+    vcommon = ["ctag.sft_data", "--task", "queries", "--timelines", f"{BENCH}/timelines.jsonl",
+               "--bench", VAL, "--plain-ratio", "0.6"]
+    for tag, extra in (("text", []), ("tt", ["--time-tokens"])):
+        run(f"SFT: question targets ({tag})", py + qcommon + extra + ["--out", f"{GEN}/sft_q_{tag}.jsonl"],
+            f"{GEN}/sft_q_{tag}.jsonl")
+        run(f"SFT: question targets for val ({tag})", py + vcommon + extra + ["--out", f"{BENCH}/sft_q_{tag}_val.jsonl"],
+            f"{BENCH}/sft_q_{tag}_val.jsonl")
+    tcommon = ["ctag.train_lora", "--precision", PRECISION, "--amp", AMP, "--batch-size", BS, "--grad-accum", ACCUM,
+               "--lr", LR, "--epochs", EPOCHS, "--max-seq-len", "3072"] + (["--train-encoder"] if TRAIN_ENC else [])
+    run("train arm C at scale (text digits)",
+        py + tcommon + ["--data", f"{GEN}/sft_q_text.jsonl", "--val", f"{BENCH}/sft_q_text_val.jsonl",
+                        "--out", "runs/lora_q_text"], "runs/lora_q_text/adapter_config.json")
+    run("train arm E retest (time symbols)",
+        py + tcommon + ["--data", f"{GEN}/sft_q_tt.jsonl", "--val", f"{BENCH}/sft_q_tt_val.jsonl",
+                        "--time-tokens", "--head-init", "bpe", "--none-weight", "0.3", "--time-rows", ARM_E_ROWS,
+                        "--out", "runs/lora_q_tt"], "runs/lora_q_tt/adapter_config.json")
+    for tag in ("text", "tt"):
+        run(f"eval arm {'C' if tag == 'text' else 'E'} at scale on test",
+            py + ["ctag.run_zeroshot", "--model", "qwen2.5-omni", "--adapter", f"runs/lora_q_{tag}",
+                  "--precision", PRECISION, "--bench", TEST, "--out", f"runs/esc50/test_q_{tag}"],
+            f"runs/esc50/test_q_{tag}/summary.json")
+
 # ---------------------------------------------------------------- 6. the gate and the table
 def load(p):
     try:
@@ -155,8 +195,13 @@ if t:
     print(f"test  event F1 (pooled) {t['event_f1_pooled']:.3f}  under-report {t['under_report_rate']:.3f}  "
           f"duration ratio {t['duration_ratio_median']}")
     print("      lowest recall by sound:", ", ".join(f"{k} {x:.2f}" for k, x in sorted(t["recall_by_label"].items(), key=lambda kv: kv[1])[:4]))
+types = ["PLAIN", "ORDINAL", "AFTER", "BEFORE", "NEXT_AFTER", "WHILE", "NOT_FOLLOWED", "ALL"]
 if q:
-    types = ["PLAIN", "ORDINAL", "AFTER", "BEFORE", "NEXT_AFTER", "WHILE", "NOT_FOLLOWED", "ALL"]
     print("test  f1@0.5 from the timeline: " + "  ".join(f"{ty} {q['by_type'][ty]['f1@0.5']:.3f}" for ty in types if ty in q["by_type"]))
+for tag, name in (("text", "arm C at scale (text digits)"), ("tt", "arm E retest (time symbols)")):
+    s = load(f"runs/esc50/test_q_{tag}/summary.json")
+    if s:
+        print(f"test  {name}: " + "  ".join(f"{ty} {s['by_type'][ty]['f1@0.5']:.3f}" for ty in types if ty in s["by_type"])
+              + f"   empty-answer rate {s['by_type']['ALL']['false_rejection_rate']:.2f}")
 persist()
 print(f"\nresults copied to {RESULTS}; pull them with:  rsync -av <vm>:{RESULTS}/ runs_nebius_phase3/")

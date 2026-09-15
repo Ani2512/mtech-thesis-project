@@ -154,9 +154,13 @@ def lora_targets_by_subtree(model) -> dict[str, int]:
     return dict(counts)
 
 
+TIME_ROWS_FILE = "time_rows.json"
+
+
 def build_model(model_id: str, precision: str | None, lora_r: int, lora_alpha: int,
                 lora_dropout: float, time_tokens: bool = False, max_seconds: float = 30.0,
-                resolution: float = 0.1, train_encoder: bool = False):
+                resolution: float = 0.1, train_encoder: bool = False, head_init: str = "zero",
+                time_rows: str = "delta"):
     import torch
     from peft import LoraConfig, get_peft_model, prepare_model_for_kbit_training
     from transformers import Qwen2_5OmniProcessor, Qwen2_5OmniThinkerForConditionalGeneration
@@ -188,6 +192,15 @@ def build_model(model_id: str, precision: str | None, lora_r: int, lora_alpha: i
         # the model already represents those digits rather than at random.
         n = vocab.init_embeddings(processor.tokenizer, model.get_input_embeddings().weight)
         print(f"[train] added {added} timestamp tokens, initialised {n} embeddings")
+        if head_init == "bpe":
+            # The same for the OUTPUT rows. With zeroed head rows every timestamp
+            # token starts at the same logit, and on one T4 epoch the head learned
+            # only the most frequent target, <t=none> (arm E, results_kaggle_v6).
+            head = model.get_output_embeddings()
+            if head is None:
+                raise RuntimeError("no output embedding to initialise")
+            n_h = vocab.init_embeddings(processor.tokenizer, head.weight)
+            print(f"[train] initialised {n_h} output-head rows from the mean of their BPE pieces")
 
     if "4bit" in label or "8bit" in label:
         model = prepare_model_for_kbit_training(model, use_gradient_checkpointing=True)
@@ -218,13 +231,14 @@ def build_model(model_id: str, precision: str | None, lora_r: int, lora_alpha: i
         # 152,064 x 3,584 matrices trainable, about 16 GiB of weights, gradients
         # and Adam state, which is why arm E died on a T4 inside a minute. The
         # new rows are still trained in full, but only the new rows -- see
-        # timetokens.wrap_new_rows.
-        modules_to_save=None,
+        # timetokens.wrap_new_rows. --time-rows full opts back in on a card
+        # that can hold it (48 GB+): that is TEMPO's own configuration.
+        modules_to_save=(["embed_tokens", "lm_head"] if time_tokens and time_rows == "full" else None),
     )
-    if time_tokens:
+    if time_tokens and time_rows == "delta":
         from .timetokens import wrap_new_rows
 
-        wrap_new_rows(model, base_vocab)
+        wrap_new_rows(model, base_vocab, zero_head_rows=(head_init != "bpe"))
 
     model = get_peft_model(model, cfg)
 
@@ -235,7 +249,7 @@ def build_model(model_id: str, precision: str | None, lora_r: int, lora_alpha: i
     if leaked or "model" not in where or (train_encoder and "audio_tower" not in where):
         raise RuntimeError(f"LoRA must attach to {sorted(allowed)} only, got {where}")
 
-    if time_tokens:
+    if time_tokens and time_rows == "delta":
         # get_peft_model freezes everything it does not own, the deltas included.
         n_delta = 0
         for name, param in model.named_parameters():
@@ -300,12 +314,36 @@ def time_loss_terms(logits, labels, time_ids, Q, ignore_index: int = -100):
     return -(q * logp).sum(dim=-1).mean(), n
 
 
+def weighted_ce(logits, labels, token_id: int, weight: float, ignore_index: int = -100):
+    """Token cross-entropy with one token id down- (or up-) weighted.
+
+    Arm E answered <t=none> on 513 of 699 test queries. That token is the single
+    most frequent target (every rejection example is exactly one of it) and the
+    cheapest sequence to emit, so an unweighted loss lets the head win by saying
+    "none". Weighting its positions by `weight` (< 1) removes that incentive
+    without touching the data. weight == 1 reproduces the model's own loss.
+    """
+    import torch
+    import torch.nn.functional as F
+
+    logits = logits[:, :-1, :].float()
+    labels = labels[:, 1:]
+    ce = F.cross_entropy(logits.reshape(-1, logits.shape[-1]), labels.reshape(-1),
+                         ignore_index=ignore_index, reduction="none")
+    flat = labels.reshape(-1)
+    w = torch.where(flat == token_id, torch.full_like(ce, float(weight)), torch.ones_like(ce))
+    w = torch.where(flat == ignore_index, torch.zeros_like(ce), w)
+    denom = w.sum()
+    return (ce * w).sum() / denom if float(denom) > 0 else ce.sum() * 0.0
+
+
 def _make_time_trainer():
     """Built lazily so importing this module does not require transformers."""
     from transformers import Trainer
 
     class TimeAwareTrainer(Trainer):
-        def configure_time_loss(self, tokenizer, vocab, sigma: float, lam: float):
+        def configure_time_loss(self, tokenizer, vocab, sigma: float, lam: float,
+                                none_weight: float = 1.0):
             import torch
 
             from .timetokens import EMPTY_TOKEN
@@ -320,11 +358,15 @@ def _make_time_trainer():
                                    dtype=torch.float)
             self._lam = float(lam)
             self._time_seen = 0
+            self._none_id = tokenizer.convert_tokens_to_ids(EMPTY_TOKEN)
+            self._none_weight = float(none_weight)
 
         def compute_loss(self, model, inputs, return_outputs=False, **kw):
             labels = inputs.get("labels")
             outputs = model(**inputs)
             loss = outputs.loss
+            if labels is not None and getattr(self, "_none_weight", 1.0) != 1.0:
+                loss = weighted_ce(outputs.logits, labels, self._none_id, self._none_weight)
             if labels is not None and getattr(self, "_lam", 0.0) > 0:
                 dev = outputs.logits.device
                 if self._time_ids.device != dev:
@@ -424,6 +466,15 @@ def main(argv=None):
                     help="TEMPO uses 0.3 s")
     ap.add_argument("--time-lambda", type=float, default=0.5,
                     help="TEMPO uses 0.5")
+    ap.add_argument("--head-init", choices=["zero", "bpe"], default="zero",
+                    help="output-head rows for the new tokens: zero (phase 2) or the mean of "
+                         "their BPE pieces, like the input rows (arm E retest)")
+    ap.add_argument("--none-weight", type=float, default=1.0,
+                    help="loss weight on the <t=none> target; < 1 stops the head from winning by "
+                         "saying 'none' (arm E answered it on 513/699 test queries)")
+    ap.add_argument("--time-rows", choices=["delta", "full"], default="delta",
+                    help="delta: train only a correction on the new rows (fits a T4); full: unfreeze "
+                         "embed_tokens and lm_head entirely (TEMPO's setting, ~16 GB extra)")
     a = ap.parse_args(argv)
 
     from transformers import Trainer, TrainingArguments
@@ -446,7 +497,7 @@ def main(argv=None):
           + ("  (emulated on pre-Ampere cards, ~5x slower)" if bf16 and not _bf16_ok() else ""))
     model, processor, vocab = build_model(a.model_id, a.precision, a.lora_r, a.lora_alpha,
                                           a.lora_dropout, a.time_tokens, a.max_seconds,
-                                          a.resolution, a.train_encoder)
+                                          a.resolution, a.train_encoder, a.head_init, a.time_rows)
     collate = GroundingCollator(processor, max_seq_len=(a.max_seq_len or None))
 
     optim = a.optim
@@ -494,7 +545,8 @@ def main(argv=None):
     if a.time_tokens:
         trainer = _make_time_trainer()(model=model, args=args, train_dataset=train,
                                        eval_dataset=val, data_collator=collate)
-        trainer.configure_time_loss(processor.tokenizer, vocab, a.time_sigma, a.time_lambda)
+        trainer.configure_time_loss(processor.tokenizer, vocab, a.time_sigma, a.time_lambda,
+                                    a.none_weight)
     else:
         trainer = Trainer(model=model, args=args, train_dataset=train, eval_dataset=val,
                           data_collator=collate)
@@ -528,9 +580,18 @@ def main(argv=None):
     # which is how a run with nan grad_norm and a loss of 0 reported PASSED.
     # Inspect the logged history instead.
     if a.time_tokens:
-        from .timetokens import save_deltas
+        import os
 
-        save_deltas(model, a.out)
+        if a.time_rows == "delta":
+            from .timetokens import save_deltas
+
+            save_deltas(model, a.out)
+        # Tell inference which scheme the adapter used: with full rows there is
+        # no delta file and that is correct, not a broken adapter.
+        os.makedirs(a.out, exist_ok=True)
+        with open(os.path.join(a.out, TIME_ROWS_FILE), "w") as f:
+            json.dump({"time_rows": a.time_rows, "head_init": a.head_init,
+                       "none_weight": a.none_weight}, f)
 
     history = [h for h in trainer.state.log_history if "grad_norm" in h or "loss" in h]
     nan_grads = sum(1 for h in history

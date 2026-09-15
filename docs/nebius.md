@@ -60,10 +60,19 @@ about $6-8. The arm E retest and a second epoch count are extra runs of the same
 size. Stop the VM when `phase3.log` ends with the results table; the disk can be
 kept for the next run.
 
+## Arm E retest (in the runner, `CTAG_ARM_E=1`, default on)
+
+Phase 2's time-symbol arm lost to text digits (0.194 vs 0.530) under T4
+constraints. The runner retrains both on the same generated questions for the
+same epochs, and gives the symbols TEMPO's own configuration:
+`--head-init bpe` (output rows start from the mean of their digit pieces, not
+zero), `--time-rows full` (both tables trainable; ~16 GB extra, fine on 48 GB),
+`--none-weight 0.3` and `--max-empty-share 0.15` (the empty answer can no longer
+be won by default). The table at the end prints both arms side by side with
+their empty-answer rate. Roughly the cost of the transcription run again.
+
 ## Not in this runner yet
 
-- Arm E retest (output rows from mean-of-BPE, balanced "none"): flags to add to
-  `train_lora`, then one more `run()` block.
 - Boundary refinement against signal energy: a post-processor on
   `pred_timelines.jsonl`, to be scored with `run_transcribe`'s metrics.
 - The real-recording set (`ctag.real_data`): evaluate the same adapter on it

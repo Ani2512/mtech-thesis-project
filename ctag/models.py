@@ -137,7 +137,14 @@ class Qwen25OmniBackend:
             # rather than inside it. Without this they stay at initialisation and
             # arm E silently measures nothing.
             had_deltas = load_deltas(self.model.thinker, adapter, self.processor.tokenizer)
-            if n_tok > cur and not had_deltas:
+            # --time-rows full trains embed_tokens and lm_head inside the adapter
+            # (modules_to_save), so no delta file is the correct state there.
+            full_rows = False
+            marker = os.path.join(adapter, "time_rows.json")
+            if os.path.exists(marker):
+                import json as _json
+                full_rows = _json.load(open(marker)).get("time_rows") == "full"
+            if n_tok > cur and not had_deltas and not full_rows:
                 raise RuntimeError(
                     "the adapter's tokenizer added tokens but no time_deltas.pt sits "
                     "next to it; the new embeddings would be random and every "
