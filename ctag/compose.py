@@ -162,10 +162,14 @@ def _label_sequence(labels: list[str], n_events: int, rng: random.Random) -> lis
 
 
 def compose_clip(bank, rng: random.Random, duration: float = 20.0, n_events: int = 6, n_labels: int = 3,
-                 p_overlap: float = 0.35, min_overlap: float = 0.3, snr_db: float = 20.0):
+                 p_overlap: float = 0.35, min_overlap: float = 0.3, snr_db: float = 20.0,
+                 gap: tuple[float, float] = (0.4, 2.5)):
     """Place n_events drawn from n_labels classes. With probability p_overlap an event
     starts inside the previous one, overlapping it by at least min_overlap seconds, which
-    is what makes WHILE conditions satisfiable by construction. Returns (audio, Timeline)."""
+    is what makes WHILE conditions satisfiable by construction. `gap` bounds the silence
+    between consecutive non-overlapping events; short gaps are the hard case for
+    enumeration (TEMPO's "segment merging"). Returns (audio, Timeline)."""
+    n_labels = max(2, min(n_labels, len(bank.labels())))
     labels = rng.sample(bank.labels(), n_labels)
     seq = _label_sequence(labels, n_events, rng)
 
@@ -185,7 +189,7 @@ def compose_clip(bank, rng: random.Random, duration: float = 20.0, n_events: int
             latest = prev.offset - min_overlap
             t = rng.uniform(prev.onset + 0.05, latest) if latest > prev.onset + 0.05 else prev.onset
         elif prev is not None:
-            t = cursor + rng.uniform(0.4, 2.5)
+            t = cursor + rng.uniform(*gap)
         else:
             t = cursor
         if t + d > duration - 0.2:

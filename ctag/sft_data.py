@@ -19,10 +19,10 @@ from __future__ import annotations
 import argparse
 import json
 import random
-from collections import Counter
 from pathlib import Path
 
 from .models import SYSTEM, prompt_for
+from .transcribe import target_timeline, transcribe_query
 
 
 _TIME_VOCAB = None
@@ -92,6 +92,49 @@ def synth_plain(timelines: dict, clip_ids: set[str], audio_of: dict[str, str],
     return out
 
 
+def transcribe_example(audio: str, events, duration: float | None, vocab: list[str] | None) -> dict:
+    """One example per clip: the whole timeline as the answer. Same SYSTEM and
+    prompt_for as inference, so the trained prompt is byte-identical to the one
+    ctag.run_transcribe sends."""
+    return {
+        "audio": audio,
+        "kind": "transcribe",
+        "messages": [
+            {"role": "system", "content": SYSTEM},
+            {"role": "user", "content": prompt_for(transcribe_query(vocab), duration)},
+        ],
+        "target": target_timeline(events),
+    }
+
+
+def build_transcribe(timelines: Path, out: Path, bench: Path | None = None, seed: int = 0,
+                     vocab_in_prompt: bool = True, vocab: list[str] | None = None) -> dict:
+    """Timeline-transcription training set. With --bench, only the clips of that
+    split are used, which is how the train/val/test boundary is respected."""
+    rng = random.Random(seed)
+    keep = None
+    if bench is not None:
+        keep = {json.loads(l)["clip_id"] for l in open(bench, encoding="utf-8")}
+    tls = [json.loads(l) for l in open(timelines, encoding="utf-8")]
+    # the closed name set comes from EVERY clip in the file, not just this split:
+    # the prompt must name the same sounds at training and at test time
+    vocab = vocab or sorted({e["label"] for d in tls for e in d["events"]})
+    if keep is not None:
+        tls = [d for d in tls if d["clip_id"] in keep]
+    rows = [transcribe_example(d["audio"], d["events"], d.get("duration"),
+                               vocab if vocab_in_prompt else None) for d in tls if d.get("audio")]
+    rng.shuffle(rows)
+    out.parent.mkdir(parents=True, exist_ok=True)
+    with open(out, "w", encoding="utf-8") as f:
+        for e in rows:
+            f.write(json.dumps(e, ensure_ascii=False) + "\n")
+    n_ev = [len(d["events"]) for d in tls]
+    return {"examples": len(rows), "clips": len(tls), "task": "transcribe",
+            "events_per_clip_mean": round(sum(n_ev) / len(n_ev), 2) if n_ev else 0.0,
+            "empty_targets": sum(1 for e in rows if e["target"] == "[]"),
+            "vocab": vocab, "vocab_in_prompt": vocab_in_prompt}
+
+
 def build(bench: Path, timelines: Path, out: Path, plain_ratio: float = 0.5,
           seed: int = 0, augment_plain: bool = True, time_tokens: bool = False) -> dict:
     rng = random.Random(seed)
@@ -153,9 +196,13 @@ def build(bench: Path, timelines: Path, out: Path, plain_ratio: float = 0.5,
 
 def main(argv=None):
     ap = argparse.ArgumentParser()
-    ap.add_argument("--bench", required=True)
+    ap.add_argument("--bench", default=None, help="split to draw clips/queries from (required for --task queries)")
     ap.add_argument("--timelines", required=True)
     ap.add_argument("--out", required=True)
+    ap.add_argument("--task", choices=["queries", "transcribe"], default="queries",
+                    help="queries: per-question targets (phase 2); transcribe: one whole-timeline target per clip")
+    ap.add_argument("--no-vocab-in-prompt", action="store_true",
+                    help="transcribe only: leave the sound-name list out of the prompt")
     ap.add_argument("--plain-ratio", type=float, default=0.5,
                     help="share of training examples that are plain grounding (default 0.5)")
     ap.add_argument("--no-augment", action="store_true")
@@ -163,6 +210,12 @@ def main(argv=None):
                     help="emit atomic timestamp tokens instead of digit strings")
     ap.add_argument("--seed", type=int, default=0)
     a = ap.parse_args(argv)
+    if a.task == "transcribe":
+        s = build_transcribe(Path(a.timelines), Path(a.out), Path(a.bench) if a.bench else None,
+                             a.seed, not a.no_vocab_in_prompt)
+        print(json.dumps(s, indent=2)); return
+    if not a.bench:
+        raise SystemExit("--bench is required for --task queries")
     s = build(Path(a.bench), Path(a.timelines), Path(a.out), a.plain_ratio, a.seed,
               not a.no_augment, a.time_tokens)
     print(json.dumps(s, indent=2))
