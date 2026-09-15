@@ -17,6 +17,7 @@ b.wav\t0.500\t3.000\tCat
 b.wav\t3.000\t3.000\tCat
 b.wav\t5.000\t9.000\tRunning_water
 b.wav\t5.100\t5.200\tDog
+c.wav\t0.000\t10.000\t
 """
 
 
@@ -31,9 +32,10 @@ def _desed(tmp_path, with_audio=True):
 
 def test_import_desed_builds_timelines_with_durations_from_the_audio(tmp_path):
     tsv, root = _desed(tmp_path)
-    s = import_strong(tsv, root, tmp_path / "out", "desed")
+    s = import_strong(tsv, root, tmp_path / "out", "desed", duration=10.0)
     rows = {json.loads(l)["clip_id"]: json.loads(l) for l in open(tmp_path / "out" / "timelines.jsonl")}
-    assert s["clips"] == 2 and s["clips_without_audio"] == 0
+    assert s["clips"] == 3 and s["clips_without_audio"] == 1          # c.wav: blank label = empty clip, no audio written
+    assert rows["c"]["events"] == [] and rows["c"]["duration"] == 10.0
     assert rows["a"]["duration"] == 10.0 and rows["b"]["duration"] == 8.0
     assert [e["label"] for e in rows["a"]["events"]] == ["Dog", "Speech", "Dog", "Dishes"]   # sorted by onset
     assert len(rows["b"]["events"]) == 3            # the zero-length Cat row was dropped
@@ -44,7 +46,7 @@ def test_import_without_audio_uses_the_given_duration(tmp_path):
     tsv, root = _desed(tmp_path, with_audio=False)
     s = import_strong(tsv, root, tmp_path / "out", "desed", duration=10.0)
     rows = [json.loads(l) for l in open(tmp_path / "out" / "timelines.jsonl")]
-    assert s["clips_without_audio"] == 2 and all(r["duration"] == 10.0 for r in rows)
+    assert s["clips_without_audio"] == 3 and all(r["duration"] == 10.0 for r in rows)
     s = import_strong(tsv, root, tmp_path / "out2", "desed", duration=10.0, require_audio=True)
     assert s["clips"] == 0
 
