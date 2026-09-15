@@ -13,6 +13,10 @@ once for the processor files (~10 MB).
 
 Anything that fails here would have failed on the paid machine after the data
 generation. It does not check numerical quality: the model is random.
+
+Found so far by running it: the Omni processor needs torchvision; qwen-omni-utils
+needs audioread; transformers 5.2 removed warmup_ratio; without CUDA the Trainer
+and the loader pick Apple's MPS backend, where bf16 crashes (all now guarded).
 """
 from __future__ import annotations
 
