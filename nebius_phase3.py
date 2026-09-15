@@ -15,6 +15,7 @@ Knobs (environment variables, all optional):
     CTAG_BS          per-device batch size               (2)
     CTAG_ACCUM       gradient accumulation               (4)
     CTAG_LR          learning rate                        (1e-4)
+    CTAG_LORA_R      LoRA rank; alpha is always 2r        (128, TEMPO's setting; phase 2 used 32)
     CTAG_PRECISION   bf16 | fp16 | 4bit                   (bf16)
     CTAG_TRAIN_ENC   1 to also train the audio encoder    (1)
     CTAG_SMOKE       1 to stop after the 20-step smoke test
@@ -47,6 +48,8 @@ EPOCHS = os.environ.get("CTAG_EPOCHS", "3")
 BS = os.environ.get("CTAG_BS", "2")
 ACCUM = os.environ.get("CTAG_ACCUM", "4")
 LR = os.environ.get("CTAG_LR", "1e-4")
+LORA_R = os.environ.get("CTAG_LORA_R", "128")
+LORA_ALPHA = str(2 * int(LORA_R))
 PRECISION = os.environ.get("CTAG_PRECISION", "bf16")
 TRAIN_ENC = os.environ.get("CTAG_TRAIN_ENC", "1") == "1"
 SMOKE_ONLY = os.environ.get("CTAG_SMOKE", "0") == "1"
@@ -62,7 +65,7 @@ GEN = "data/gen_esc50"
 ADAPTER = "runs/lora_transcribe"
 TEST, VAL = f"{BENCH}/benchmark_test.jsonl", f"{BENCH}/benchmark_val.jsonl"
 AMP = "bf16" if PRECISION == "bf16" else "none"
-print(f"[phase3] gen={GEN_N} epochs={EPOCHS} bs={BS} accum={ACCUM} lr={LR} precision={PRECISION} "
+print(f"[phase3] gen={GEN_N} epochs={EPOCHS} bs={BS} accum={ACCUM} lr={LR} lora_r={LORA_R} precision={PRECISION} "
       f"train_encoder={TRAIN_ENC} workers={WORKERS}", flush=True)
 
 
@@ -119,6 +122,7 @@ if not ok:
 
 train_common = ["ctag.train_lora", "--data", f"{GEN}/sft_transcribe.jsonl", "--val", f"{BENCH}/sft_transcribe_val.jsonl",
                 "--precision", PRECISION, "--amp", AMP, "--batch-size", BS, "--grad-accum", ACCUM, "--lr", LR,
+                "--lora-r", LORA_R, "--lora-alpha", LORA_ALPHA,
                 "--max-seq-len", "4096"] + (["--train-encoder"] if TRAIN_ENC else [])
 
 # ---------------------------------------------------------------- 4. smoke test, then the real run
@@ -178,7 +182,8 @@ if ARM_E:
         run(f"SFT: question targets for val ({tag})", py + vcommon + extra + ["--out", f"{BENCH}/sft_q_{tag}_val.jsonl"],
             f"{BENCH}/sft_q_{tag}_val.jsonl")
     tcommon = ["ctag.train_lora", "--precision", PRECISION, "--amp", AMP, "--batch-size", BS, "--grad-accum", ACCUM,
-               "--lr", LR, "--epochs", EPOCHS, "--max-seq-len", "3072"] + (["--train-encoder"] if TRAIN_ENC else [])
+               "--lr", LR, "--lora-r", LORA_R, "--lora-alpha", LORA_ALPHA, "--epochs", EPOCHS,
+               "--max-seq-len", "3072"] + (["--train-encoder"] if TRAIN_ENC else [])
     run("train arm C at scale (text digits)",
         py + tcommon + ["--data", f"{GEN}/sft_q_text.jsonl", "--val", f"{BENCH}/sft_q_text_val.jsonl",
                         "--out", "runs/lora_q_text"], "runs/lora_q_text/adapter_config.json")

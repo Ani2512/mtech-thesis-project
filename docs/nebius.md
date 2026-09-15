@@ -54,6 +54,14 @@ What the run produces and where the gate is read:
 | `test_from_timeline/summary.json` | every query type computed from the predicted timelines, the number to compare with phase 2's 0.645 |
 | `test_direct_transcribe_adapter/summary.json` | the same adapter asked per question, a like-for-like reference |
 
+## LoRA rank
+
+The runner trains at rank 128 (alpha 256), TEMPO's setting for the same
+7B-class language model; phase 2 used rank 32 on the T4. Rank 128 is roughly
+four times the adapter parameters (about 320M) and about 4 GB of weights,
+gradients and optimiser state in fp32, well within 48 GB. `CTAG_LORA_R=32`
+restores the phase 2 size for a like-for-like comparison.
+
 ## Cost
 
 At 20,000 clips x 3 epochs with batch 2 x accumulation 4, expect roughly 2.5-3.5 h

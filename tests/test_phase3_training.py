@@ -91,3 +91,21 @@ def test_warmup_is_a_step_count_not_a_ratio():
     assert warmup_steps(4, 1, 1, 1.0, 2) == 1            # a 2-step smoke test still warms up
     src = open("ctag/train_lora.py").read()
     assert "warmup_ratio=" not in src
+
+
+def test_runner_trains_at_rank_128_with_alpha_2r_by_default():
+    import json
+    import os
+
+    env = {**os.environ, "CTAG_DRY_RUN": "1", "CTAG_ARM_E": "1"}
+    env.pop("CTAG_LORA_R", None)
+    out = subprocess.run([sys.executable, "nebius_phase3.py"], capture_output=True, text=True, env=env)
+    cmds = [json.loads(l[4:]) for l in out.stdout.splitlines() if l.startswith("DRY ")]
+    trains = [c for c in cmds if c[2] == "ctag.train_lora"]
+    assert len(trains) >= 4
+    for c in trains:
+        assert c[c.index("--lora-r") + 1] == "128" and c[c.index("--lora-alpha") + 1] == "256", c
+    env["CTAG_LORA_R"] = "32"
+    out = subprocess.run([sys.executable, "nebius_phase3.py"], capture_output=True, text=True, env=env)
+    c = next(json.loads(l[4:]) for l in out.stdout.splitlines() if l.startswith("DRY ") and "ctag.train_lora" in l)
+    assert c[c.index("--lora-r") + 1] == "32" and c[c.index("--lora-alpha") + 1] == "64"
