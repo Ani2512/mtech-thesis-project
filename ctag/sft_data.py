@@ -136,7 +136,8 @@ def build_transcribe(timelines: Path, out: Path, bench: Path | None = None, seed
 
 
 def build(bench: Path, timelines: Path, out: Path, plain_ratio: float = 0.5,
-          seed: int = 0, augment_plain: bool = True, time_tokens: bool = False) -> dict:
+          seed: int = 0, augment_plain: bool = True, time_tokens: bool = False,
+          max_empty_share: float | None = None, max_examples: int | None = None) -> dict:
     rng = random.Random(seed)
     rows = [json.loads(l) for l in open(bench, encoding="utf-8")]
     tl, audio_of = {}, {}
@@ -172,6 +173,24 @@ def build(bench: Path, timelines: Path, out: Path, plain_ratio: float = 0.5,
             want_plain = int(len(cond_bench) * plain_ratio / (1 - plain_ratio))
             chosen = rng.sample(plain, min(want_plain, len(plain))) + cond_bench
 
+    # Balance the empty answer. Every rejection example is one token (<t=none>
+    # or []) and the cheapest thing to emit; arm E learned it first and answered
+    # it on 73% of the test queries. Cap its share of the training set.
+    if max_empty_share is not None:
+        empties = [e for e in chosen if e["target"] in ("[]", "<t=none>")]
+        rest = [e for e in chosen if e["target"] not in ("[]", "<t=none>")]
+        cap = int(max_empty_share * len(rest) / max(1e-9, 1 - max_empty_share)) if max_empty_share < 1 else len(empties)
+        if len(empties) > cap:
+            rng.shuffle(empties)
+            empties = empties[:cap]
+        chosen = rest + empties
+        if max_examples is not None and len(chosen) > max_examples:
+            # subsample each pool in proportion, so the cap survives the subsample
+            n_e = min(len(empties), int(round(max_examples * len(empties) / len(chosen))))
+            n_r = min(len(rest), max_examples - n_e)
+            chosen = rng.sample(rest, n_r) + rng.sample(empties, n_e)
+    elif max_examples is not None and len(chosen) > max_examples:
+        chosen = rng.sample(chosen, max_examples)
     rng.shuffle(chosen)
     out.parent.mkdir(parents=True, exist_ok=True)
     with open(out, "w", encoding="utf-8") as f:
@@ -208,6 +227,10 @@ def main(argv=None):
     ap.add_argument("--no-augment", action="store_true")
     ap.add_argument("--time-tokens", action="store_true",
                     help="emit atomic timestamp tokens instead of digit strings")
+    ap.add_argument("--max-empty-share", type=float, default=None,
+                    help="queries only: cap the share of examples whose answer is empty (e.g. 0.15)")
+    ap.add_argument("--max-examples", type=int, default=None,
+                    help="queries only: random subsample to this many examples after mixing")
     ap.add_argument("--seed", type=int, default=0)
     a = ap.parse_args(argv)
     if a.task == "transcribe":
@@ -217,7 +240,7 @@ def main(argv=None):
     if not a.bench:
         raise SystemExit("--bench is required for --task queries")
     s = build(Path(a.bench), Path(a.timelines), Path(a.out), a.plain_ratio, a.seed,
-              not a.no_augment, a.time_tokens)
+              not a.no_augment, a.time_tokens, a.max_empty_share, a.max_examples)
     print(json.dumps(s, indent=2))
 
 

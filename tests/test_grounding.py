@@ -1253,3 +1253,30 @@ def test_agent_adapter_is_only_wired_for_the_qwen_grounder(tmp_path):
         run_agent(["--grounder", "mock:oracle", "--adapter", str(tmp_path),
                    "--bench", str(tmp_path / "none.jsonl"), "--out", str(tmp_path / "o")])
     assert "adapter" in str(e.value)
+
+
+def test_collator_labels_a_whole_timeline_target_end_to_end(tmp_path):
+    """A transcription target is a long JSON list; every one of its tokens, and
+    nothing before them, must be a training label, whatever the audio expansion."""
+    import numpy as np
+    import soundfile as sf
+    import torch
+
+    from ctag.train_lora import GroundingCollator
+    from ctag.transcribe import target_timeline
+
+    wav = tmp_path / "c.wav"
+    sf.write(wav, np.zeros(16000, dtype="float32"), 16000)
+    events = [{"label": f"s{i}", "onset": i * 2.0, "offset": i * 2.0 + 1.5} for i in range(8)]
+    target = target_timeline(events)
+    n_ans = len(target.split())                       # the stub tokenises on whitespace
+    assert n_ans > 30
+    for expansion in (1, 400):
+        c = GroundingCollator(_stub_processor(expansion, n_ans))
+        batch = c([{"audio": str(wav), "messages": [{"role": "user", "content": "Locate: every sound event"}],
+                    "target": target}])
+        labels, ids, attn = batch["labels"], batch["input_ids"], batch["attention_mask"]
+        end = int(attn[0].sum())
+        kept = (labels[0] != -100).nonzero().flatten().tolist()
+        assert kept == list(range(end - n_ans, end)), (expansion, len(kept), n_ans)
+        assert torch.equal(labels[0][kept], ids[0][kept])

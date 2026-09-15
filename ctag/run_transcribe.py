@@ -102,7 +102,8 @@ def main(argv=None):
     ap.add_argument("--adapter", default=None, help="trained weights from ctag.train_lora")
     ap.add_argument("--max-new-tokens", type=int, default=512,
                     help="generation cap; a whole timeline needs far more than the 96 the query arms use")
-    ap.add_argument("--precision", default=None, choices=[None, "fp16", "8bit", "4bit"])
+    ap.add_argument("--precision", default=None, choices=["fp16", "bf16", "8bit", "4bit"])
+    ap.add_argument("--model-id", default=None, help="override the backend's checkpoint (a local path for dry runs)")
     ap.add_argument("--n", type=int, default=None, help="only the first n clips")
     ap.add_argument("--no-vocab-in-prompt", action="store_true")
     ap.add_argument("--iou", type=float, default=0.5)
@@ -122,6 +123,8 @@ def main(argv=None):
         kw = {"max_new_tokens": a.max_new_tokens}
         if a.precision:
             kw["precision"] = a.precision
+        if a.model_id:
+            kw["model_id"] = a.model_id
         if a.adapter:
             if a.model != "qwen2.5-omni":
                 raise SystemExit("--adapter is only wired for the qwen2.5-omni backend")

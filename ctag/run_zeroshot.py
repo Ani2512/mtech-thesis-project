@@ -21,11 +21,12 @@ def main(argv=None):
     ap.add_argument("--out", required=True)
     ap.add_argument("--n", type=int, default=None)
     ap.add_argument("--types", default=None, help="comma-separated subset of condition types")
-    ap.add_argument("--precision", default=None, choices=["fp16", "8bit", "4bit"],
+    ap.add_argument("--precision", default=None, choices=["fp16", "bf16", "8bit", "4bit"],
                     help="override the automatic fit (default: pick from GPU memory)")
     ap.add_argument("--max-new-tokens", type=int, default=96,
                     help="an interval list is short; 96 is ample and keeps decoding fast")
     ap.add_argument("--adapter", default=None, help="path to a LoRA adapter from ctag.train_lora")
+    ap.add_argument("--model-id", default=None, help="override the backend's checkpoint (a local path for dry runs)")
     ap.add_argument("--samples", type=int, default=1,
                     help="sample k answers and union them; raises recall, which the "
                          "measured 5.6x miss/false-alarm asymmetry makes a good trade")
@@ -38,6 +39,8 @@ def main(argv=None):
     out.mkdir(parents=True, exist_ok=True)
     kw = {} if a.model.startswith("mock:") or a.model == "gemini" else {
         "precision": a.precision, "max_new_tokens": a.max_new_tokens}
+    if a.model_id:
+        kw["model_id"] = a.model_id
     if a.adapter:
         assert a.model == "qwen2.5-omni", "--adapter is only wired for qwen2.5-omni"
         kw["adapter"] = a.adapter

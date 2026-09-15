@@ -65,7 +65,7 @@ def _fit_plan(param_billions: float = 8.4, override: str | None = None) -> tuple
     """Returns (label, kwargs for from_pretrained)."""
     import torch
 
-    if override in ("fp16", "8bit", "4bit"):
+    if override in ("fp16", "bf16", "8bit", "4bit"):
         choice = override
     else:
         total = (torch.cuda.get_device_properties(0).total_memory / 1024 ** 3
@@ -74,8 +74,18 @@ def _fit_plan(param_billions: float = 8.4, override: str | None = None) -> tuple
 
     if choice == "cpu":
         return "cpu (no GPU visible - this will be very slow)", {"dtype": torch.float32}
+    # device_map="auto" only where CUDA is: without it accelerate picks Apple's
+    # MPS backend on a Mac, and bf16 on MPS segfaults in the weight loader
+    # (found by scripts/dry_run_gpu_paths.py). On CPU the model simply stays
+    # on CPU.
+    dev = {"device_map": "auto"} if torch.cuda.is_available() else {}
     if choice == "fp16":
-        return "fp16", {"dtype": torch.float16, "device_map": "auto"}
+        return "fp16", {"dtype": torch.float16, **dev}
+    if choice == "bf16":
+        # Full-precision weights on a card with native bf16 (Ampere+, e.g. L40S):
+        # no quantisation error, no dequantisation in every forward, bf16's
+        # fp32 range so no overflow. The 7B thinker is ~17 GB this way.
+        return "bf16", {"dtype": torch.bfloat16, **dev}
 
     from transformers import BitsAndBytesConfig
 
@@ -85,7 +95,7 @@ def _fit_plan(param_billions: float = 8.4, override: str | None = None) -> tuple
         cfg = BitsAndBytesConfig(load_in_4bit=True, bnb_4bit_quant_type="nf4",
                                  bnb_4bit_compute_dtype=torch.float16,
                                  bnb_4bit_use_double_quant=True)
-    return choice, {"quantization_config": cfg, "device_map": "auto"}
+    return choice, {"quantization_config": cfg, **dev}
 
 
 class Qwen25OmniBackend:
@@ -132,7 +142,14 @@ class Qwen25OmniBackend:
             # rather than inside it. Without this they stay at initialisation and
             # arm E silently measures nothing.
             had_deltas = load_deltas(self.model.thinker, adapter, self.processor.tokenizer)
-            if n_tok > cur and not had_deltas:
+            # --time-rows full trains embed_tokens and lm_head inside the adapter
+            # (modules_to_save), so no delta file is the correct state there.
+            full_rows = False
+            marker = os.path.join(adapter, "time_rows.json")
+            if os.path.exists(marker):
+                import json as _json
+                full_rows = _json.load(open(marker)).get("time_rows") == "full"
+            if n_tok > cur and not had_deltas and not full_rows:
                 raise RuntimeError(
                     "the adapter's tokenizer added tokens but no time_deltas.pt sits "
                     "next to it; the new embeddings would be random and every "
