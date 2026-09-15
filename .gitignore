@@ -10,3 +10,4 @@ presentation/*.pdf
 
 # downloaded Kaggle kernel outputs (hundreds of MB; results are recorded in docs/)
 runs_kaggle_*/
+logs/

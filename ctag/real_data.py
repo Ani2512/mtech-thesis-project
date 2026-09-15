@@ -75,6 +75,11 @@ def read_strong_tsv(tsv: Path, fmt: str, mid_map: dict[str, str] | None = None) 
                     continue
                 lab = mid_map[lab]
             stem = Path(fn).stem if fmt == "desed" else fn
+            if not lab.strip():
+                # DESED marks a clip with no events by one row with a blank label
+                dropped["blank_label"] += 1
+                events.setdefault(stem, [])
+                continue
             try:
                 a, b = float(a), float(b)
             except ValueError:
@@ -99,6 +104,8 @@ def _duration(audio: Path | None, events: list[Event], default: float | None) ->
             pass
     if default:
         return default
+    if not events:            # an empty clip with no audio on disk and no --duration
+        return 0.0
     return round(max(e.offset for e in events) + 0.5, 3)
 
 
