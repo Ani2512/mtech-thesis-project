@@ -77,6 +77,12 @@ CoMET-style training-free agent (decompose the condition, ground each part,
 combine) versus LoRA fine-tuning on composed queries. Both evaluated on the
 same benchmark plus the real-recording track.
 
+Phase 2 results so far (test f1@0.5, ALL): zero-shot direct 0.207, zero-shot
+decompose 0.218, LM-only QLoRA 0.530, QLoRA grounder inside the decomposition
+0.621, per-type hybrid of the two 0.645. Timestamp tokens 0.194 (negative).
+Write-ups: `docs/results_kaggle_v4.md`, `docs/results_kaggle_v5.md`,
+`docs/results_kaggle_v6.md`.
+
 ## Running it
 
 `phase1_kaggle.ipynb` is the recommended path. Kaggle gives 30 GPU hours a week
