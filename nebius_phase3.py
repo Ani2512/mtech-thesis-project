@@ -24,6 +24,11 @@ Knobs (environment variables, all optional):
     CTAG_ARM_E       1 to also run the arm E retest: text digits vs time symbols
                      on the same generated questions, same epochs, same card    (1)
     CTAG_ARM_E_N     question examples for that comparison                        (20000)
+    CTAG_ARM_E_ARMS  text | tt | both   which of the two to train and evaluate      (both)
+                     text = arm C at scale only: the end-to-end control for the
+                     timeline result (same data scale, precision, rank and epochs,
+                     but the compositional question as the target), plus arm F at
+                     scale (that adapter as the grounder inside the decomposition)
     CTAG_ARM_E_ROWS  delta | full   how the new symbol rows are trained          (full)
     CTAG_SAVE_STEPS  resumable checkpoint every N steps    (200, ~15 min on the L40S; 0 = epoch ends)
     CTAG_WORKERS     generator processes                  (cpu count)
@@ -59,6 +64,10 @@ SMOKE_ONLY = os.environ.get("CTAG_SMOKE", "0") == "1"
 ARM_E = os.environ.get("CTAG_ARM_E", "1") == "1"
 ARM_E_N = os.environ.get("CTAG_ARM_E_N", "20000")
 ARM_E_ROWS = os.environ.get("CTAG_ARM_E_ROWS", "full")
+ARM_E_ARMS = os.environ.get("CTAG_ARM_E_ARMS", "both")
+if ARM_E_ARMS not in ("text", "tt", "both"):
+    raise SystemExit(f"CTAG_ARM_E_ARMS must be text, tt or both, got {ARM_E_ARMS!r}")
+ARMS = ("text", "tt") if ARM_E_ARMS == "both" else (ARM_E_ARMS,)
 SAVE_STEPS = os.environ.get("CTAG_SAVE_STEPS", "200")
 WORKERS = os.environ.get("CTAG_WORKERS", str(max(1, (os.cpu_count() or 2) - 1)))
 RESULTS = os.path.expanduser(os.environ.get("CTAG_RESULTS", "~/phase3_results"))
@@ -190,6 +199,8 @@ if ARM_E:
     vcommon = ["ctag.sft_data", "--task", "queries", "--timelines", f"{BENCH}/timelines.jsonl",
                "--bench", VAL, "--plain-ratio", "0.6"]
     for tag, extra in (("text", []), ("tt", ["--time-tokens"])):
+        if tag not in ARMS:
+            continue
         run(f"SFT: question targets ({tag})", py + qcommon + extra + ["--out", f"{GEN}/sft_q_{tag}.jsonl"],
             f"{GEN}/sft_q_{tag}.jsonl")
         run(f"SFT: question targets for val ({tag})", py + vcommon + extra + ["--out", f"{BENCH}/sft_q_{tag}_val.jsonl"],
@@ -197,18 +208,29 @@ if ARM_E:
     tcommon = ["ctag.train_lora", "--precision", PRECISION, "--amp", AMP, "--batch-size", BS, "--grad-accum", ACCUM,
                "--lr", LR, "--lora-r", LORA_R, "--lora-alpha", LORA_ALPHA, "--epochs", EPOCHS,
                "--max-seq-len", "3072", "--save-steps", SAVE_STEPS] + (["--train-encoder"] if TRAIN_ENC else [])
-    run("train arm C at scale (text digits)",
-        py + tcommon + ["--data", f"{GEN}/sft_q_text.jsonl", "--val", f"{BENCH}/sft_q_text_val.jsonl",
-                        "--out", "runs/lora_q_text"], trained("runs/lora_q_text"))
-    run("train arm E retest (time symbols)",
-        py + tcommon + ["--data", f"{GEN}/sft_q_tt.jsonl", "--val", f"{BENCH}/sft_q_tt_val.jsonl",
-                        "--time-tokens", "--head-init", "bpe", "--none-weight", "0.3", "--time-rows", ARM_E_ROWS,
-                        "--out", "runs/lora_q_tt"], trained("runs/lora_q_tt"))
-    for tag in ("text", "tt"):
+    if "text" in ARMS:
+        run("train arm C at scale (text digits)",
+            py + tcommon + ["--data", f"{GEN}/sft_q_text.jsonl", "--val", f"{BENCH}/sft_q_text_val.jsonl",
+                            "--out", "runs/lora_q_text"], trained("runs/lora_q_text"))
+    if "tt" in ARMS:
+        run("train arm E retest (time symbols)",
+            py + tcommon + ["--data", f"{GEN}/sft_q_tt.jsonl", "--val", f"{BENCH}/sft_q_tt_val.jsonl",
+                            "--time-tokens", "--head-init", "bpe", "--none-weight", "0.3", "--time-rows", ARM_E_ROWS,
+                            "--out", "runs/lora_q_tt"], trained("runs/lora_q_tt"))
+    for tag in ARMS:
         run(f"eval arm {'C' if tag == 'text' else 'E'} at scale on test",
             py + ["ctag.run_zeroshot", "--model", "qwen2.5-omni", "--adapter", f"runs/lora_q_{tag}",
                   "--precision", PRECISION, "--bench", TEST, "--out", f"runs/esc50/test_q_{tag}"],
             f"runs/esc50/test_q_{tag}/summary.json")
+    if "text" in ARMS:
+        # Arm F at scale: the arm C adapter as the per-sound grounder inside the
+        # decomposition. With the timeline row this completes the three-way
+        # comparison at one scale: question target asked directly (C), question
+        # target inside the decomposition (F), timeline target inside it (phase 3).
+        run("eval arm F at scale on test (arm C adapter inside the decomposition)",
+            py + ["ctag.run_agent", "--grounder", "qwen2.5-omni", "--adapter", "runs/lora_q_text",
+                  "--precision", PRECISION, "--bench", TEST, "--out", "runs/esc50/test_f_text"],
+            "runs/esc50/test_f_text/summary.json")
 
 # ---------------------------------------------------------------- 6. the gate and the table
 def load(p):
@@ -240,8 +262,9 @@ if r and "after" in r:
 types = ["PLAIN", "ORDINAL", "AFTER", "BEFORE", "NEXT_AFTER", "WHILE", "NOT_FOLLOWED", "ALL"]
 if q:
     print("test  f1@0.5 from the timeline: " + "  ".join(f"{ty} {q['by_type'][ty]['f1@0.5']:.3f}" for ty in types if ty in q["by_type"]))
-for tag, name in (("text", "arm C at scale (text digits)"), ("tt", "arm E retest (time symbols)")):
-    s = load(f"runs/esc50/test_q_{tag}/summary.json")
+for tag, name in (("q_text", "arm C at scale (text digits, asked directly)"), ("f_text", "arm F at scale (arm C adapter in the decomposition)"),
+                  ("q_tt", "arm E retest (time symbols)")):
+    s = load(f"runs/esc50/test_{tag}/summary.json")
     if s:
         print(f"test  {name}: " + "  ".join(f"{ty} {s['by_type'][ty]['f1@0.5']:.3f}" for ty in types if ty in s["by_type"])
               + f"   empty-answer rate {s['by_type']['ALL']['false_rejection_rate']:.2f}")
