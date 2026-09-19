@@ -81,6 +81,10 @@ PDF exports are gitignored and rebuilt on demand.
 | `recall_bias.md` | The asymmetry measurement (slopes 1.411 vs 0.252), the derivation of beta, the two mechanisms, and the caveats. |
 | `timestamp_tokens.md` | Why atomic time tokens, the TEMPO vs TimeAudio designs, the quantisation trap, and the new-rows memory fix. |
 | `six_month_plan.md` | Month-by-month plan with the decision rule for a failed arm C. |
+| `timeline_transcription.md` | Phase 3 design: one target per clip (every event with start and end), the parser and event scorer, the timeline grounder, the hard generator, and the caveats. |
+| `nebius.md` | Rented-GPU runbook: VM choice, one-command bootstrap, the runner, preemptible VMs and resume, boundary refinement, arm E retest. |
+| `results_kaggle_v2.md` … `results_kaggle_v6.md` | Phase 2 runs as printed by the Kaggle runner (v6 = arm E re-evaluated, arm F, best 0.645). |
+| `results_nebius_phase3.md` | Phase 3 on the Nebius L40S (2026-09-19): whole-timeline transcription at 20k clips × 3 epochs, rank 128, bf16. Gate PASS (val event F1 0.992); every query type from the test timelines 0.961–1.000, ALL 0.983 vs 0.645 in phase 2. Refinement harmful at this accuracy, direct prompting with the adapter is the 0.0 control, three GPU-only bugs, measured vs estimated cost. |
 | `FILE_MAP.md` | This file. |
 
 ---
