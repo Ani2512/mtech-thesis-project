@@ -142,3 +142,17 @@ def test_full_rows_bridge_reconciles_fp32_copies_with_a_bf16_body():
     same.body.weight.requires_grad_(False)
     assert bridge_full_rows(same) == torch.bfloat16
     assert not same.emb._forward_hooks and not same.head._forward_pre_hooks
+
+
+def test_full_rows_adapter_forces_the_embedding_resize():
+    """A full-rows adapter saved embed_tokens/lm_head at the tokenizer's length
+    (151,967 rows) while the fresh thinker carries Qwen's padded 152,064; PEFT
+    refuses the shape unless the matrix is resized first (L40S dry run,
+    2026-09-19). A plain text adapter still leaves the padded matrix alone."""
+    from ctag.models import adapter_needs_resize
+
+    padded, with_time = 152064, 151967
+    assert adapter_needs_resize(with_time, padded, has_deltas=False, full_rows=True)
+    assert adapter_needs_resize(with_time, padded, has_deltas=True, full_rows=False)
+    assert not adapter_needs_resize(151665, padded, has_deltas=False, full_rows=False)
+    assert adapter_needs_resize(padded + 5, padded, has_deltas=False, full_rows=False)

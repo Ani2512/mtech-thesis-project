@@ -26,6 +26,18 @@ def prompt_for(query_text: str, duration: float | None = None) -> str:
     return f"Locate: {query_text}.{d} Reply with only the JSON list."
 
 
+def adapter_needs_resize(n_tok: int, cur: int, has_deltas: bool, full_rows: bool) -> bool:
+    """Whether the thinker's embedding matrix must be resized to the adapter
+    tokenizer's length before the adapter loads. Qwen pads the matrix (152,064
+    rows for 151,665 tokens), so a plain text adapter's tokenizer is *smaller*
+    than the matrix and shrinking to it is pointless. A tokenizer that added
+    tokens, a delta file (its row bookkeeping needs the exact size), or full
+    rows (train_lora resized to the tokenizer, so the saved embed_tokens/lm_head
+    copies have exactly n_tok rows and PEFT refuses any other shape: the L40S
+    dry run, 2026-09-19) each need it."""
+    return has_deltas or full_rows or n_tok > cur
+
+
 class MockBackend:
     def __init__(self, mode: str = "oracle", seed: int = 0):
         self.mode, self.rng = mode, random.Random(seed)
@@ -128,12 +140,14 @@ class Qwen25OmniBackend:
             n_tok = len(self.processor.tokenizer)
             cur = self.model.thinker.get_input_embeddings().weight.shape[0]
             has_deltas = os.path.exists(os.path.join(adapter, DELTA_FILE))
-            # Qwen pads the matrix (152,064 rows for 151,665 tokens), so a plain
-            # text adapter's tokenizer is *smaller* than the matrix. Shrinking to
-            # it is pointless and untested; only a tokenizer that added tokens,
-            # or a delta file whose row bookkeeping needs the exact size, gets a
-            # resize.
-            if has_deltas or n_tok > cur:
+            # --time-rows full trains embed_tokens and lm_head inside the adapter
+            # (modules_to_save), so no delta file is the correct state there.
+            full_rows = False
+            marker = os.path.join(adapter, "time_rows.json")
+            if os.path.exists(marker):
+                import json as _json
+                full_rows = _json.load(open(marker)).get("time_rows") == "full"
+            if adapter_needs_resize(n_tok, cur, has_deltas, full_rows):
                 print(f"[qwen2.5-omni] resizing embeddings {cur} -> {n_tok} for the adapter")
                 self.model.thinker.resize_token_embeddings(n_tok)
 
@@ -142,13 +156,6 @@ class Qwen25OmniBackend:
             # rather than inside it. Without this they stay at initialisation and
             # arm E silently measures nothing.
             had_deltas = load_deltas(self.model.thinker, adapter, self.processor.tokenizer)
-            # --time-rows full trains embed_tokens and lm_head inside the adapter
-            # (modules_to_save), so no delta file is the correct state there.
-            full_rows = False
-            marker = os.path.join(adapter, "time_rows.json")
-            if os.path.exists(marker):
-                import json as _json
-                full_rows = _json.load(open(marker)).get("time_rows") == "full"
             if n_tok > cur and not had_deltas and not full_rows:
                 raise RuntimeError(
                     "the adapter's tokenizer added tokens but no time_deltas.pt sits "
