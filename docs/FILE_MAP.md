@@ -55,6 +55,8 @@ PDF exports are gitignored and rebuilt on demand.
 | `sft_data.py` | Builds supervised fine-tuning examples in the exact inference prompt format. `--plain-ratio` weights the mix toward plain grounding (the diagnostic's conclusion) and synthesises extra PLAIN and absent-sound examples for free from the timeline. `--time-tokens` emits atomic timestamp targets for arm E. |
 | `train_lora.py` | **Arms C and E.** QLoRA on the Qwen2.5-Omni thinker, audio encoder frozen. The collator masks loss to the answer *counted from the end*, caps sequence length to bound the logits allocation, and `--preflight` runs one forward+backward on the longest example before training so an OOM costs a minute. Refuses to report success on a run with NaN gradients or zero loss. |
 | `timetokens.py` | **Arm E's representation.** `TimeVocab`: one token per 0.1 s, embeddings initialised as the mean of the number's BPE pieces (TEMPO), a distance-aware soft-label loss, and round-half-up quantisation. `wrap_new_rows()` trains only the 301 new vocabulary rows (~4 MB) instead of both full matrices (~16 GB); `save_deltas()`/`load_deltas()` persist them beside the adapter. |
+| `stopprob.py` | **Phase 3, trailing check.** Reads the model's P(stop) before each event of a timeline answer out of `generate(output_scores=True)`: finds the decision step for every event in the decoded tokens (`{"` vs `]` for the first, `},` vs `}]` after each) and sums the probability of the closing tokens there. Tokenisation-agnostic. |
+| `trailing.py` | **Phase 3, trailing check.** The error analysis found that spurious events are appended at the end of the list. Three rules on the last emitted event (IoU with another event, silence under it, P(stop) before it), scored against gold with the same matching as the event scorer, a threshold sweep, and `--tune-on` to pick the threshold on val. IoU and silence are measured negatives; P(stop) is the candidate, run by the Nebius runner (`CTAG_STOP_PROBS`). |
 | `__init__.py` | Package marker. |
 
 ---
@@ -86,6 +88,7 @@ PDF exports are gitignored and rebuilt on demand.
 | `nebius.md` | Rented-GPU runbook: VM choice, one-command bootstrap, the runner, preemptible VMs and resume, boundary refinement, arm E retest. |
 | `results_kaggle_v2.md` … `results_kaggle_v6.md` | Phase 2 runs as printed by the Kaggle runner (v6 = arm E re-evaluated, arm F, best 0.645). |
 | `error_analysis_phase3.md` | Every phase 3 miss on val + test (10 of 100 clips, 4 dropped + 7 spurious events): drops are quiet sounds inside overlaps, spurious events are duplicates appended at the end of the list, keyboard typing weakest, failure rate by concurrency, which test questions each error breaks. Made by `scripts/error_analysis_phase3.py`. |
+| `test_trailing.py` (tests) | Decision steps on the real Qwen tokenisation, P(stop) from synthetic scores, the three rules, `apply_rule` bookkeeping, the CLI and `--tune-on` on mock predictions. |
 | `results_nebius_phase3.md` | Phase 3 on the Nebius L40S (2026-09-19): whole-timeline transcription at 20k clips × 3 epochs, rank 128, bf16. Gate PASS (val event F1 0.992); every query type from the test timelines 0.961–1.000, ALL 0.983 vs 0.645 in phase 2. Refinement harmful at this accuracy, direct prompting with the adapter is the 0.0 control, three GPU-only bugs, measured vs estimated cost. |
 | `FILE_MAP.md` | This file. |
 

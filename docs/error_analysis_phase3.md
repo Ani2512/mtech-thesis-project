@@ -110,12 +110,31 @@ about glass breaking in that clip. 681 of 699 test questions are answered perfec
    toward clips with 3-4 concurrent events and a quiet sound (keyboard typing, cat,
    footsteps) under a loud one; the failures are concentrated there and the model sees few
    such cases now.
-2. **A trailing-event check.** 6 of 7 spurious events are the last one emitted. A cheap
-   post-hoc test is to re-score the last event only when it duplicates an already-transcribed
-   window (IoU > 0.5 with another predicted event of a different label) or sits in silence;
-   dropping it on those two conditions would have removed 6 of 7 spurious events on val+test
-   without touching a correct one. It needs a check on a held-out split before use, since
-   `esc50_00075` also shows that the "duplicate" can be the only trace of a real sound.
+2. **A trailing-event check, but not a geometric one.** 6 of 7 spurious events are the last
+   one emitted, so a check on the last event is the right place. Measured with
+   `ctag.trailing` (proper one-to-one matching, 100 val+test clips), the two rules that need
+   no model rerun both fail:
+
+   | rule on the last emitted event | thr | fired | removed spurious | removed correct | event F1 |
+   |---|---|---|---|---|---|
+   | overlaps another predicted event, val | IoU 0.5 | 4 | 1 | 3 | 0.992 -> 0.988 |
+   | overlaps another predicted event, val | IoU 0.9 | 1 | 1 | 0 | 0.992 -> 0.993 |
+   | overlaps another predicted event, test | IoU 0.5 | 5 | 3 | 2 | 0.989 -> 0.991 |
+   | overlaps another predicted event, test | IoU 0.9 | 0 | 0 | 0 | unchanged |
+   | audio under it is quiet, val | RMS ratio 0.3 | 9 | 0 | 9 | 0.992 -> 0.976 |
+   | audio under it is quiet, test | RMS ratio 0.3 | 7 | 1 | 6 | 0.989 -> 0.980 |
+
+   The benchmark overlaps 45% of its events (30 of 300 gold clips end with an event that
+   overlaps another at IoU >= 0.5), so a correct last event often looks like a duplicate;
+   and its quiet sounds sit under loud ones, so a silence gate removes real keyboard typing
+   and cats. The threshold that helps on val (IoU 0.9) does nothing on test. What remains
+   is the model's own stopping confidence: at every event boundary it chooses `},`
+   (continue) or `}]` (stop), and the probability it put on stopping before the last event
+   is recorded by `run_transcribe --stop-probs` (`ctag.stopprob`) and tested by
+   `ctag.trailing --rule stop`, with the threshold picked on val. The runner does this in
+   the next VM session (`CTAG_STOP_PROBS=1`, default); it needs one more pass over the 100
+   clips. An earlier version of this note claimed the geometric rule would remove 6 of 7
+   spurious events without touching a correct one; that was wrong.
 3. **Do not rely on energy alone.** Only 1 of 7 spurious events is in silence, so an energy
    gate on its own removes one error and would have made the refinement mistake again.
 4. **Report per-type numbers with the count-error mechanism attached.** WHILE and ORDINAL

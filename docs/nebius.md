@@ -162,6 +162,18 @@ both, so the table shows whether it helps on real predictions. On procedural
 clips it recovers most of a 0.3-0.5 s edge error and costs about a point on
 exact edges where an impulsive sound overlaps a continuous one.
 
+## Trailing-event check (in the runner, `CTAG_STOP_PROBS=1`, default on)
+
+After the evaluation the runner transcribes val and test once more with
+`--stop-probs`, which records the model's probability of closing the list
+before each event (`runs/esc50/transcribe_{val,test}_stop`). `ctag.trailing`
+then picks the P(stop) threshold on val, drops the last emitted test event
+where it exceeds the threshold (`transcribe_test_trailing`), and
+`test_from_timeline_trailing` answers every query type from the result. The
+summary prints removed spurious / removed correct. Costs one more pass over the
+100 clips (about as long as the first transcription); `CTAG_STOP_PROBS=0`
+skips it. Why P(stop) and not geometry or energy: docs/error_analysis_phase3.md.
+
 ## Not in this runner yet
 
 - The real-recording set (`ctag.real_data`): evaluate the same adapter on it
