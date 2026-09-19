@@ -189,3 +189,33 @@ def test_runner_checkpoints_every_train_and_skips_on_the_done_marker():
     src = open("nebius_phase3.py").read()
     assert 'adapter_config.json")' not in src
     assert src.count("trained(") >= 5
+
+
+def test_runner_can_run_arm_c_at_scale_alone_with_its_decomposition_eval():
+    """CTAG_ARM_E_ARMS=text is the end-to-end control for the timeline result:
+    the question target at the same scale, asked directly (arm C) and inside
+    the decomposition (arm F). No time-symbol step may run, and the F eval must
+    use the arm C adapter as the model grounder."""
+    env = dict(os.environ, CTAG_DRY_RUN="1", CTAG_ARM_E="1", CTAG_ARM_E_ARMS="text")
+    out = subprocess.run([sys.executable, "nebius_phase3.py"], capture_output=True, text=True, env=env)
+    assert out.returncode == 0, out.stderr[-2000:]
+    cmds = [json.loads(l[4:]) for l in out.stdout.splitlines() if l.startswith("DRY ")]
+    joined = [" ".join(c) for c in cmds]
+    assert not any("--time-tokens" in j for j in joined)
+    assert not any("lora_q_tt" in j for j in joined)
+    trains = [c for c in cmds if c[2] == "ctag.train_lora" and "runs/lora_q_text" in c]
+    assert len(trains) == 1 and "--save-steps" in trains[0]
+    direct = [c for c in cmds if c[2] == "ctag.run_zeroshot" and "runs/lora_q_text" in c]
+    assert len(direct) == 1
+    f = [c for c in cmds if c[2] == "ctag.run_agent" and "runs/lora_q_text" in c]
+    assert len(f) == 1 and f[0][f[0].index("--grounder") + 1] == "qwen2.5-omni" and "--adapter" in f[0]
+    for bad in ("both", "tt", "nonsense"):
+        env["CTAG_ARM_E_ARMS"] = bad
+        r = subprocess.run([sys.executable, "nebius_phase3.py"], capture_output=True, text=True, env=env)
+        if bad == "nonsense":
+            assert r.returncode != 0 and "CTAG_ARM_E_ARMS" in r.stderr
+        else:
+            assert r.returncode == 0
+            j = [" ".join(json.loads(l[4:])) for l in r.stdout.splitlines() if l.startswith("DRY ")]
+            assert any("lora_q_tt" in x for x in j)
+            assert any("test_f_text" in x for x in j) == (bad == "both")

@@ -59,6 +59,8 @@ def main(argv=None):
     ap.add_argument("--n", type=int, default=None)
     ap.add_argument("--out", required=True)
     ap.add_argument("--seed", type=int, default=0)
+    ap.add_argument("--precision", default=None, choices=["fp16", "bf16", "8bit", "4bit"],
+                    help="load plan for a model grounder (default: chosen from the card's memory)")
     ap.add_argument("--adapter", default=None,
                     help="LoRA adapter from ctag.train_lora, so the fine-tuned model "
                          "does the plain groundings and the code does the composition")
@@ -83,6 +85,8 @@ def main(argv=None):
         label = "agent:timeline"
     else:
         kw = {}
+        if a.precision:
+            kw["precision"] = a.precision
         if a.adapter:
             if a.grounder != "qwen2.5-omni":
                 raise SystemExit("--adapter is only wired for the qwen2.5-omni grounder")

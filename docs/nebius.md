@@ -106,6 +106,41 @@ The public IP may change on restart. Measured on 2026-09-19: a full
 transcription run is about 10 h on-demand ($19); preemptible with resume
 costs about $9 plus whatever partial steps the kills throw away.
 
+## Arm C at scale on a preemptible VM (the end-to-end control)
+
+The phase 3 result (every query type 0.961–1.000 from the written timeline,
+`results_nebius_phase3.md`) changed the training target *and* the data scale,
+precision, rank and epochs at once relative to phase 2 (0.645). The control that
+separates the two is arm C at the same scale: the same 20,000 generated clips as
+question-and-answer examples, the same recipe, asked directly at test time. The
+runner has it (`CTAG_ARM_E=1 CTAG_ARM_E_ARMS=text`), together with arm F at scale
+(that adapter as the grounder inside the decomposition), so the final table shows
+the three-way comparison at one scale. About 6–8 h; the time-symbol half is
+skipped.
+
+Procedure, on a fresh preemptible VM (the stopped Regular VM cannot be converted):
+
+1. Console: Create VM, **Preemptible**, NVIDIA L40S Intel 1 GPU / 16 vCPU / 64 GiB,
+   Ubuntu 24.04 for NVIDIA GPUs (CUDA 13), 150 GiB SSD, public IP Auto (dynamic),
+   user `ubuntu`, key `~/.ssh/id_ed25519_nebius.pub`. Note the public IP.
+2. Bootstrap (idempotent, ~10 min):
+   `ssh -i ~/.ssh/id_ed25519_nebius ubuntu@<ip> 'curl -fsSL https://raw.githubusercontent.com/Ani2512/mtech-thesis-project/main/scripts/nebius_bootstrap.sh | bash'`
+3. Push the transcription adapter and its evaluations from the Mac so the runner
+   skips them (1.7 GB): `scripts/nebius_sync.sh push <ip>`
+4. Run:
+   `ssh -i ~/.ssh/id_ed25519_nebius ubuntu@<ip> 'cd ~/mtech-thesis-project && source .venv/bin/activate && export HF_HOME=$PWD/hf_cache && CTAG_ARM_E=1 CTAG_ARM_E_ARMS=text nohup python nebius_phase3.py > logs/armc.log 2>&1 &'`
+   The data regenerates in 3 min, the smoke train reruns (3 min, a check of the
+   new machine), transcription and its evaluation are skipped, then: SFT question
+   targets → train arm C at scale (checkpoint every 200 steps) → eval C directly →
+   eval F (decomposition) → table.
+5. After a preemption: start the VM again in the console (the IP may change), ssh in,
+   rerun the command of step 4. Training resumes from the newest checkpoint.
+6. Pull: `scripts/nebius_sync.sh pull <ip>`; then delete the VM.
+
+Reading the result: near 0.55 (phase 2's arm C) means the timeline target is the
+result; near the timeline row means scale did most of it and the timeline route's
+contribution is the wrong-"nothing" elimination and one model call per clip.
+
 ## Arm E retest (in the runner, `CTAG_ARM_E=1`, default on)
 
 Phase 2's time-symbol arm lost to text digits (0.194 vs 0.530) under T4
