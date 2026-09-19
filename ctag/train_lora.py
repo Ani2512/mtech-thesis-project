@@ -282,9 +282,37 @@ def build_model(model_id: str, precision: str | None, lora_r: int, lora_alpha: i
             n_cast += 1
     if n_cast:
         print(f"[train] cast {n_cast} trainable tensors to fp32 for stability")
+    if time_tokens and time_rows == "full":
+        body = bridge_full_rows(model)
+        print(f"[train] full rows: fp32 copies of embed_tokens/lm_head bridged to a {body} body")
 
     model.print_trainable_parameters()
     return model, processor, vocab
+
+
+def bridge_full_rows(model):
+    """--time-rows full trains PEFT's fp32 copies of embed_tokens and lm_head
+    (modules_to_save) inside an otherwise bf16 model, and --amp none has no
+    autocast to reconcile them: the first LoRA linear raised "mat1 and mat2 must
+    have the same dtype, but got Float and BFloat16" on the L40S dry run
+    (2026-09-19). Cast at the two boundaries, like NewRowsEmbedding/NewRowsLinear
+    do for the delta path: embedding output down to the body's dtype, head input
+    up to the head's (fp32 logits, which the loss wants anyway). Returns the
+    body dtype. A no-op when the copies already match the body."""
+    body = next(p.dtype for p in model.parameters()
+                if p.is_floating_point() and not p.requires_grad)
+
+    def rows_dtype(m):
+        return next((p.dtype for p in m.parameters() if p.requires_grad), None)
+
+    emb, head = model.get_input_embeddings(), model.get_output_embeddings()
+    if rows_dtype(emb) not in (None, body):
+        emb.register_forward_hook(lambda m, args, out: out.to(body))
+    head_dtype = rows_dtype(head)
+    if head_dtype not in (None, body):
+        head.register_forward_pre_hook(
+            lambda m, args: (args[0].to(head_dtype),) + tuple(args[1:]))
+    return body
 
 
 def time_loss_terms(logits, labels, time_ids, Q, ignore_index: int = -100):

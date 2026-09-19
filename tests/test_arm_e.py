@@ -101,3 +101,44 @@ def test_runner_has_the_arm_e_block():
     src = open("nebius_phase3.py").read()
     for s in ("CTAG_ARM_E", "--head-init", "--none-weight", "--time-rows", "--max-empty-share", "sft_q_tt"):
         assert s in src
+
+
+def test_full_rows_bridge_reconciles_fp32_copies_with_a_bf16_body():
+    """--time-rows full: the trainable embedding and head copies are fp32, the
+    frozen body is bf16 and there is no autocast. Without the bridge the first
+    body matmul raises a dtype mismatch (the L40S dry run, 2026-09-19); with it
+    the forward runs, the logits are fp32 and both copies receive gradients."""
+    from ctag.train_lora import bridge_full_rows
+
+    torch.manual_seed(0)
+    m = _tiny(8, 2, 4)
+    m.body = nn.Linear(4, 4, bias=False)
+    m.to(torch.bfloat16)
+    m.body.weight.requires_grad_(False)
+    for p in (m.emb.weight, m.head.weight):        # what the fp32 cast does
+        p.data = p.data.float()
+    ids = torch.tensor([[1, 9, 3]])
+
+    def forward():
+        return m.head(m.body(m.emb(ids)))
+
+    try:
+        forward()
+        assert False, "expected a dtype mismatch before the bridge"
+    except RuntimeError as e:
+        assert "dtype" in str(e)
+
+    assert bridge_full_rows(m) == torch.bfloat16
+    logits = forward()
+    assert logits.dtype == torch.float32
+    logits.float().sum().backward()
+    assert m.emb.weight.grad is not None and m.emb.weight.grad.abs().sum() > 0
+    assert m.head.weight.grad is not None and m.head.weight.grad.abs().sum() > 0
+    assert m.body.weight.grad is None
+
+    same = _tiny(8, 2, 4)                          # copies already match the body: no hooks
+    same.body = nn.Linear(4, 4, bias=False)
+    same.to(torch.bfloat16)
+    same.body.weight.requires_grad_(False)
+    assert bridge_full_rows(same) == torch.bfloat16
+    assert not same.emb._forward_hooks and not same.head._forward_pre_hooks
