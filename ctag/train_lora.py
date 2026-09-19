@@ -217,6 +217,15 @@ def build_model(model_id: str, precision: str | None, lora_r: int, lora_alpha: i
         # full-precision weights and gradient checkpointing the LoRA inputs
         # would otherwise carry no grad and every step would be a no-op.
         model.enable_input_require_grads()
+        # The Trainer turns checkpointing on only inside train(), so the
+        # preflight (one forward+backward before that) ran WITHOUT it on the
+        # bf16 path and held every activation of the 958-token longest example:
+        # 42 GiB and OOM on a 44 GiB L40S (first smoke run, 2026-09-19), a
+        # failure training itself would not have had. The kbit branch above
+        # already enables it, which is why the T4 preflights were faithful.
+        # Same kwargs as the TrainingArguments below; the Trainer's own call is
+        # then a no-op.
+        model.gradient_checkpointing_enable(gradient_checkpointing_kwargs={"use_reentrant": False})
     model.config.use_cache = False
 
     cfg = LoraConfig(
@@ -468,8 +477,10 @@ def _preflight(model, collate, examples, a):
     if torch.cuda.is_available():
         peak = torch.cuda.max_memory_allocated() / 1024 ** 3
         _, total = (x / 1024 ** 3 for x in torch.cuda.mem_get_info())
+        ckpt = getattr(model, "is_gradient_checkpointing", None)
         print(f"[train] preflight OK: peak {peak:.1f} GiB of {total:.1f} GiB "
-              f"on the longest example ({batch['input_ids'].shape[1]} tokens)")
+              f"on the longest example ({batch['input_ids'].shape[1]} tokens), "
+              f"gradient checkpointing {'on' if ckpt else 'OFF' if ckpt is False else 'unknown'}")
     else:
         print(f"[train] preflight OK on CPU ({batch['input_ids'].shape[1]} tokens)")
 
