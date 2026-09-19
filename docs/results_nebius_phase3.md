@@ -177,8 +177,9 @@ GPU utilisation sat at 62-100%; audio decoding (2 loader workers) is the likely 
 
 ## Next
 
-1. Error analysis on the WHILE/ORDINAL misses and the ~9% of clips with a count error
-   (`pred_timelines.jsonl` vs `timelines.jsonl`).
+1. Error analysis: DONE, see `error_analysis_phase3.md` (10 of 100 val+test clips
+   imperfect, all count errors: quiet sounds dropped inside overlaps, duplicate events
+   appended at the end of the list; no timing errors).
 2. Arm E retest at ARM_E_N=4,000 on a preemptible L40S with the resume support (about $4).
 3. DESED public-eval: hand review, then `run_transcribe --timelines data/desed/timelines.jsonl`
    with this adapter, for the composed-vs-real number.
