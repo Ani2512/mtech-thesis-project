@@ -2,8 +2,10 @@
 
 Same discipline as kaggle_phase2.py: every step is skipped when its output
 exists, results are copied to RESULTS after every step, and a crash resumes
-rather than restarts. Unlike Kaggle there is no output-file cap and no session
-limit, so this runs to completion once.
+rather than restarts: finished stages are skipped and a training that was cut
+off (preempted VM, OOM in evaluation) continues from its newest checkpoint-N,
+which train_lora writes every CTAG_SAVE_STEPS steps. On a preemptible VM just
+start the VM again and rerun the same command.
 
     # on the VM, after docs/nebius.md's setup
     cd ~/mtech-thesis-project && nohup python nebius_phase3.py > logs/phase3.log 2>&1 &
@@ -23,6 +25,7 @@ Knobs (environment variables, all optional):
                      on the same generated questions, same epochs, same card    (1)
     CTAG_ARM_E_N     question examples for that comparison                        (20000)
     CTAG_ARM_E_ROWS  delta | full   how the new symbol rows are trained          (full)
+    CTAG_SAVE_STEPS  resumable checkpoint every N steps    (200, ~15 min on the L40S; 0 = epoch ends)
     CTAG_WORKERS     generator processes                  (cpu count)
     CTAG_RESULTS     where finished runs are copied       (~/phase3_results)
     CTAG_DRY_RUN     1 to print every command and run nothing (tests validate the flags)
@@ -56,6 +59,7 @@ SMOKE_ONLY = os.environ.get("CTAG_SMOKE", "0") == "1"
 ARM_E = os.environ.get("CTAG_ARM_E", "1") == "1"
 ARM_E_N = os.environ.get("CTAG_ARM_E_N", "20000")
 ARM_E_ROWS = os.environ.get("CTAG_ARM_E_ROWS", "full")
+SAVE_STEPS = os.environ.get("CTAG_SAVE_STEPS", "200")
 WORKERS = os.environ.get("CTAG_WORKERS", str(max(1, (os.cpu_count() or 2) - 1)))
 RESULTS = os.path.expanduser(os.environ.get("CTAG_RESULTS", "~/phase3_results"))
 DRY_RUN = os.environ.get("CTAG_DRY_RUN", "0") == "1"
@@ -80,11 +84,20 @@ def persist():
             shutil.copytree(src, dst, ignore=shutil.ignore_patterns("optimizer.pt", "checkpoint-*"))
 
 
+def trained(out):
+    """A training is complete when train_lora wrote its marker. The processor
+    files are the marker of runs from before 2026-09-19 (written only at the
+    end, unlike the adapter, which the epoch-end save writes mid-run)."""
+    return [f"{out}/train_done.json", f"{out}/tokenizer_config.json"]
+
+
 def run(label, cmd, produces):
     if DRY_RUN:
         print("DRY " + json.dumps(cmd), flush=True)
         return True
-    if produces and os.path.exists(produces):
+    if isinstance(produces, str):
+        produces = [produces]
+    if produces and any(os.path.exists(p) for p in produces):
         print(f"\n=== {label}: already done ===", flush=True)
         return True
     print(f"\n=== {label} ===\n$ {' '.join(cmd)}", flush=True)
@@ -123,17 +136,17 @@ if not ok:
 train_common = ["ctag.train_lora", "--data", f"{GEN}/sft_transcribe.jsonl", "--val", f"{BENCH}/sft_transcribe_val.jsonl",
                 "--precision", PRECISION, "--amp", AMP, "--batch-size", BS, "--grad-accum", ACCUM, "--lr", LR,
                 "--lora-r", LORA_R, "--lora-alpha", LORA_ALPHA,
-                "--max-seq-len", "4096"] + (["--train-encoder"] if TRAIN_ENC else [])
+                "--max-seq-len", "4096", "--save-steps", SAVE_STEPS] + (["--train-encoder"] if TRAIN_ENC else [])
 
 # ---------------------------------------------------------------- 4. smoke test, then the real run
 ok &= run("smoke train (20 steps)", py + train_common + ["--out", "runs/lora_smoke", "--max-steps", "20"],
-          "runs/lora_smoke/adapter_config.json")
+          trained("runs/lora_smoke"))
 if not ok:
     raise SystemExit("the smoke test failed; fix before spending hours")
 if SMOKE_ONLY and not DRY_RUN:
     raise SystemExit("CTAG_SMOKE=1: stopping after the smoke test")
 ok &= run(f"train transcription ({EPOCHS} epochs)", py + train_common + ["--out", ADAPTER, "--epochs", EPOCHS],
-          f"{ADAPTER}/adapter_config.json")
+          trained(ADAPTER))
 if not ok:
     raise SystemExit("training failed")
 
@@ -183,14 +196,14 @@ if ARM_E:
             f"{BENCH}/sft_q_{tag}_val.jsonl")
     tcommon = ["ctag.train_lora", "--precision", PRECISION, "--amp", AMP, "--batch-size", BS, "--grad-accum", ACCUM,
                "--lr", LR, "--lora-r", LORA_R, "--lora-alpha", LORA_ALPHA, "--epochs", EPOCHS,
-               "--max-seq-len", "3072"] + (["--train-encoder"] if TRAIN_ENC else [])
+               "--max-seq-len", "3072", "--save-steps", SAVE_STEPS] + (["--train-encoder"] if TRAIN_ENC else [])
     run("train arm C at scale (text digits)",
         py + tcommon + ["--data", f"{GEN}/sft_q_text.jsonl", "--val", f"{BENCH}/sft_q_text_val.jsonl",
-                        "--out", "runs/lora_q_text"], "runs/lora_q_text/adapter_config.json")
+                        "--out", "runs/lora_q_text"], trained("runs/lora_q_text"))
     run("train arm E retest (time symbols)",
         py + tcommon + ["--data", f"{GEN}/sft_q_tt.jsonl", "--val", f"{BENCH}/sft_q_tt_val.jsonl",
                         "--time-tokens", "--head-init", "bpe", "--none-weight", "0.3", "--time-rows", ARM_E_ROWS,
-                        "--out", "runs/lora_q_tt"], "runs/lora_q_tt/adapter_config.json")
+                        "--out", "runs/lora_q_tt"], trained("runs/lora_q_tt"))
     for tag in ("text", "tt"):
         run(f"eval arm {'C' if tag == 'text' else 'E'} at scale on test",
             py + ["ctag.run_zeroshot", "--model", "qwen2.5-omni", "--adapter", f"runs/lora_q_{tag}",

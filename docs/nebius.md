@@ -78,6 +78,34 @@ about $6-8. The arm E retest and a second epoch count are extra runs of the same
 size. Stop the VM when `phase3.log` ends with the results table; the disk can be
 kept for the next run.
 
+## Preemptible VMs (about half price) and resuming
+
+Nebius sells the same L40S as *Preemptible* for roughly half the on-demand
+rate ($0.90/h Intel, $0.74/h AMD in September 2026), with the catch that the
+VM can be stopped at any moment. The runner and `train_lora` are built to
+survive that:
+
+- `train_lora --save-steps N` writes a resumable Trainer checkpoint (adapter,
+  optimiser, scheduler, RNG, step counter) every N steps into
+  `<out>/checkpoint-N`, keeping the two newest (about 5 GB each at rank 128).
+  The runner passes `CTAG_SAVE_STEPS` (default 200, about 15 minutes on the
+  L40S). Timestamp deltas (arm E, delta rows) are saved into each checkpoint
+  too, since PEFT does not know about them.
+- On the next start, `train_lora` resumes from the newest checkpoint on its
+  own (`--resume auto`, the default) unless the run already finished, which
+  it records in `<out>/train_done.json`. The runner skips a training only on
+  that marker, never on the adapter file the epoch-end save writes mid-run.
+- So after a preemption: start the VM again in the console, ssh in, and rerun
+  the exact same command. Everything finished is skipped, the training
+  continues from at most N steps back, and the results table prints at the
+  end as usual. Nothing else to do.
+
+The disk persists across a preemption (the VM is stopped, not deleted), so
+the model cache, the generated set and the checkpoints are all still there.
+The public IP may change on restart. Measured on 2026-09-19: a full
+transcription run is about 10 h on-demand ($19); preemptible with resume
+costs about $9 plus whatever partial steps the kills throw away.
+
 ## Arm E retest (in the runner, `CTAG_ARM_E=1`, default on)
 
 Phase 2's time-symbol arm lost to text digits (0.194 vs 0.530) under T4

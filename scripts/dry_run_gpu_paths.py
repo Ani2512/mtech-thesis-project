@@ -135,6 +135,24 @@ def main():
         s = json.load(open(work / f"runs/test_q_tt_{rows}/summary.json"))
         assert "ALL" in s["by_type"], s
 
+    # 4. preemption: a checkpoint every step, the run cut after 2 of 4 steps
+    #    (the done marker removed as a kill would leave it), then the same
+    #    command resumes from checkpoint-2. Plain LoRA and delta rows, whose
+    #    deltas live outside the adapter and must travel with the checkpoint.
+    for tag, extra in (("lora", ["--data", f"{work}/gen/sft_transcribe.jsonl", "--train-encoder"]),
+                       ("delta", ["--data", f"{work}/gen/sft_q_tt.jsonl", "--time-tokens", "--head-init", "bpe",
+                                  "--none-weight", "0.3", "--time-rows", "delta"])):
+        out = work / f"lora_resume_{tag}"
+        sh(f"resume: first 2 steps ({tag})", train + extra + ["--save-steps", "1", "--max-steps", "2", "--out", str(out)], root)
+        assert (out / "checkpoint-2").is_dir(), "no checkpoint-2"
+        assert len([c for c in out.glob("checkpoint-*")]) <= 2, "save_total_limit not applied"
+        if tag == "delta":
+            assert (out / "checkpoint-2" / "time_deltas.pt").exists(), "deltas missing from the checkpoint"
+        (out / "train_done.json").unlink()
+        sh(f"resume: continue to 4 steps ({tag})", train + extra + ["--save-steps", "1", "--max-steps", "4", "--out", str(out)], root)
+        done = json.load(open(out / "train_done.json"))
+        assert done["resumed_from"] == "checkpoint-2" and done["steps"] == 4, done
+
     print("\n*** every GPU code path ran end to end on the tiny model ***")
     print(f"work dir: {work}" + ("" if a.keep else "  (temporary)"))
 
