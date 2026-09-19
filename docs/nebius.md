@@ -16,6 +16,14 @@ on-demand L40S does it in an afternoon.
 
 ## Setup (once)
 
+One command from the Mac does all of the below (idempotent, safe to rerun):
+
+```bash
+ssh -i ~/.ssh/id_ed25519_nebius ubuntu@<ip> 'curl -fsSL https://raw.githubusercontent.com/Ani2512/mtech-thesis-project/main/scripts/nebius_bootstrap.sh | bash'
+```
+
+By hand, the same steps:
+
 ```bash
 sudo apt-get install -y git ffmpeg libsndfile1
 git clone https://github.com/Ani2512/mtech-thesis-project.git && cd mtech-thesis-project
