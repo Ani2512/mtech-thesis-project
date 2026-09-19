@@ -19,6 +19,7 @@ PDF exports are gitignored and rebuilt on demand.
 | `phase1.ipynb` | Phase 1 as a Colab notebook (CPU half runs anywhere; the model cells need a GPU). |
 | `phase1_kaggle.ipynb` | Same, laid out for Kaggle's runtime and 20 GB `/kaggle/working` limit. |
 | `configs/phase1.yaml` | Benchmark parameters for phase 1: clip length, events per clip, overlap probability, seed. |
+| `scripts/error_analysis_phase3.py` | Phase 3 error analysis on the Mac: compares the predicted val/test timelines with the gold ones, classifies every dropped/spurious event (overlap depth, position in the list, audio energy in the window) and prints the tables in `docs/error_analysis_phase3.md`. CPU, seconds. |
 
 ---
 
@@ -84,6 +85,7 @@ PDF exports are gitignored and rebuilt on demand.
 | `timeline_transcription.md` | Phase 3 design: one target per clip (every event with start and end), the parser and event scorer, the timeline grounder, the hard generator, and the caveats. |
 | `nebius.md` | Rented-GPU runbook: VM choice, one-command bootstrap, the runner, preemptible VMs and resume, boundary refinement, arm E retest. |
 | `results_kaggle_v2.md` … `results_kaggle_v6.md` | Phase 2 runs as printed by the Kaggle runner (v6 = arm E re-evaluated, arm F, best 0.645). |
+| `error_analysis_phase3.md` | Every phase 3 miss on val + test (10 of 100 clips, 4 dropped + 7 spurious events): drops are quiet sounds inside overlaps, spurious events are duplicates appended at the end of the list, keyboard typing weakest, failure rate by concurrency, which test questions each error breaks. Made by `scripts/error_analysis_phase3.py`. |
 | `results_nebius_phase3.md` | Phase 3 on the Nebius L40S (2026-09-19): whole-timeline transcription at 20k clips × 3 epochs, rank 128, bf16. Gate PASS (val event F1 0.992); every query type from the test timelines 0.961–1.000, ALL 0.983 vs 0.645 in phase 2. Refinement harmful at this accuracy, direct prompting with the adapter is the 0.0 control, three GPU-only bugs, measured vs estimated cost. |
 | `FILE_MAP.md` | This file. |
 
