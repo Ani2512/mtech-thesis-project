@@ -699,8 +699,6 @@ def main(argv=None):
     # which is how a run with nan grad_norm and a loss of 0 reported PASSED.
     # Inspect the logged history instead.
     if a.time_tokens:
-        import os
-
         if a.time_rows == "delta":
             from .timetokens import save_deltas
 
