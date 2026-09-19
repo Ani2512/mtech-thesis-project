@@ -301,6 +301,36 @@ def save_deltas(model, out_dir):
     return path
 
 
+def restore_deltas(model, ckpt_dir):
+    """Put a checkpoint's timestamp deltas (and the base rows under them) back
+    into an already-wrapped TRAINING model when resuming. load_deltas is for
+    inference: it wraps the model itself, which here would wrap twice."""
+    import os
+
+    import torch
+
+    from torch import nn
+
+    path = os.path.join(ckpt_dir, DELTA_FILE)
+    wrappers = {("embedding" if isinstance(mod.base, nn.Embedding) else "lm_head"): mod
+                for _, mod in model.named_modules()
+                if hasattr(mod, "delta") and hasattr(mod, "base_size")}
+    if not wrappers:
+        raise RuntimeError("restore_deltas on a model without new-row wrappers")
+    if not os.path.exists(path):
+        raise RuntimeError(f"{path} is missing: resuming here would restart the timestamp "
+                           "deltas from zero and silently measure nothing")
+    blob = torch.load(path, map_location="cpu")
+    with torch.no_grad():
+        for key, mod in wrappers.items():
+            e = blob[key]
+            mod.delta.copy_(e["delta"].to(mod.delta.dtype))
+            if "base_rows" in e:
+                mod.base.weight[mod.base_size:].copy_(e["base_rows"].to(mod.base.weight.dtype))
+    print(f"[train] restored timestamp deltas for {sorted(wrappers)} from {path}")
+    return True
+
+
 def vocab_from_tokenizer(tokenizer) -> "TimeVocab":
     """Recover the TimeVocab whose tokens were added to this tokenizer."""
     import re

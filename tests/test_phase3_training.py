@@ -1,5 +1,7 @@
 """Trainer options for the rented-GPU run: bf16 loading, encoder LoRA, the runner."""
 import re
+import os
+import json
 import subprocess
 import sys
 
@@ -109,3 +111,81 @@ def test_runner_trains_at_rank_128_with_alpha_2r_by_default():
     out = subprocess.run([sys.executable, "nebius_phase3.py"], capture_output=True, text=True, env=env)
     c = next(json.loads(l[4:]) for l in out.stdout.splitlines() if l.startswith("DRY ") and "ctag.train_lora" in l)
     assert c[c.index("--lora-r") + 1] == "32" and c[c.index("--lora-alpha") + 1] == "64"
+
+
+def test_latest_checkpoint_picks_the_newest_and_stops_at_the_done_marker(tmp_path):
+    """Resume support for preemptible VMs: the newest checkpoint-N wins (numeric,
+    not lexical: 900 < 2500), stray files and dirs are ignored, and a finished
+    run (train_done.json) is never resumed."""
+    from ctag.train_lora import DONE_FILE, latest_checkpoint
+
+    assert latest_checkpoint(str(tmp_path / "missing")) is None
+    out = tmp_path / "out"
+    out.mkdir()
+    assert latest_checkpoint(str(out)) is None
+    for n in (900, 2500, 1800):
+        (out / f"checkpoint-{n}").mkdir()
+    (out / "checkpoint-notes.txt").write_text("")
+    (out / "checkpoint-x").mkdir()
+    assert latest_checkpoint(str(out)) == str(out / "checkpoint-2500")
+    (out / DONE_FILE).write_text("{}")
+    assert latest_checkpoint(str(out)) is None
+
+
+def test_restore_deltas_puts_a_checkpoint_back_into_a_wrapped_model(tmp_path):
+    """A Trainer checkpoint holds the adapter only; the timestamp deltas are
+    saved beside it by a callback and must come back exactly on resume, base
+    rows included. Without a file the resume must refuse, not continue inert."""
+    import pytest
+    import torch
+    from torch import nn
+
+    from ctag.timetokens import DELTA_FILE, restore_deltas, save_deltas, wrap_new_rows
+
+    class Tiny(nn.Module):
+        def __init__(self):
+            super().__init__()
+            self.emb = nn.Embedding(10, 4)
+            self.head = nn.Linear(4, 10, bias=False)
+        def get_input_embeddings(self): return self.emb
+        def set_input_embeddings(self, m): self.emb = m
+        def get_output_embeddings(self): return self.head
+        def set_output_embeddings(self, m): self.head = m
+
+    torch.manual_seed(0)
+    m = Tiny()
+    emb, head = wrap_new_rows(m, base_size=8)
+    with torch.no_grad():
+        emb.delta.fill_(0.5)
+        head.delta.fill_(-0.25)
+        emb.base.weight[8:].fill_(2.0)
+    ck = tmp_path / "checkpoint-2"
+    ck.mkdir()
+    save_deltas(m, str(ck))
+    assert (ck / DELTA_FILE).exists()
+    with torch.no_grad():
+        emb.delta.zero_()
+        head.delta.zero_()
+        emb.base.weight[8:].zero_()
+    assert restore_deltas(m, str(ck))
+    assert torch.all(emb.delta == 0.5) and torch.all(head.delta == -0.25)
+    assert torch.all(emb.base.weight[8:] == 2.0)
+    with pytest.raises(RuntimeError, match="missing"):
+        restore_deltas(m, str(tmp_path / "checkpoint-9"))
+
+
+def test_runner_checkpoints_every_train_and_skips_on_the_done_marker():
+    """Every train_lora command the runner issues carries --save-steps, and a
+    training counts as done on train_done.json (or the pre-2026-09-19 processor
+    files), never on the adapter file the epoch-end save writes mid-run."""
+    env = dict(os.environ, CTAG_DRY_RUN="1", CTAG_SAVE_STEPS="123")
+    out = subprocess.run([sys.executable, "nebius_phase3.py"], capture_output=True, text=True, env=env)
+    assert out.returncode == 0, out.stderr[-2000:]
+    cmds = [json.loads(l[4:]) for l in out.stdout.splitlines() if l.startswith("DRY ")]
+    trains = [c for c in cmds if c[2] == "ctag.train_lora"]
+    assert len(trains) >= 4
+    for c in trains:
+        assert c[c.index("--save-steps") + 1] == "123", c
+    src = open("nebius_phase3.py").read()
+    assert 'adapter_config.json")' not in src
+    assert src.count("trained(") >= 5

@@ -20,6 +20,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 from pathlib import Path
 
 
@@ -163,6 +164,25 @@ def lora_targets_by_subtree(model) -> dict[str, int]:
 
 
 TIME_ROWS_FILE = "time_rows.json"
+DONE_FILE = "train_done.json"
+
+
+def latest_checkpoint(out_dir):
+    """The newest Trainer checkpoint-N under out_dir to resume from, or None
+    when there is none or the run already finished (DONE_FILE present). Written
+    for preemptible VMs: with --save-steps the Trainer keeps a resumable state
+    (adapter, optimiser, scheduler, RNG, step counter) every N steps, so a kill
+    costs at most N steps rather than the epoch (up to 3 h on the L40S run of
+    2026-09-19)."""
+    import glob
+
+    if not os.path.isdir(out_dir) or os.path.exists(os.path.join(out_dir, DONE_FILE)):
+        return None
+    cks = [c for c in glob.glob(os.path.join(out_dir, "checkpoint-*"))
+           if os.path.isdir(c) and c.rsplit("-", 1)[-1].isdigit()]
+    if not cks:
+        return None
+    return max(cks, key=lambda c: int(c.rsplit("-", 1)[-1]))
 
 
 def build_model(model_id: str, precision: str | None, lora_r: int, lora_alpha: int,
@@ -508,6 +528,12 @@ def main(argv=None):
                          "fp16 overflow that produces nan grad_norm without paying for "
                          "emulated bf16 on pre-Ampere cards.")
     ap.add_argument("--max-steps", type=int, default=-1)
+    ap.add_argument("--save-steps", type=int, default=0,
+                    help="resumable Trainer checkpoint every N steps (two kept, ~5 GB each at "
+                         "rank 128) so a preempted VM loses at most N steps; 0 = epoch ends only")
+    ap.add_argument("--resume", choices=["auto", "no"], default="auto",
+                    help="auto: continue from the newest checkpoint-N in --out unless the run "
+                         "already wrote train_done.json; no: start over")
     ap.add_argument("--time-tokens", action="store_true",
                     help="atomic timestamp tokens plus the distance-aware Gaussian loss")
     ap.add_argument("--max-seconds", type=float, default=30.0)
@@ -588,7 +614,13 @@ def main(argv=None):
         lr_scheduler_type="cosine",
         warmup_steps=warmup_steps(len(train), a.batch_size, a.grad_accum, a.epochs, a.max_steps),
         logging_steps=10,
-        save_strategy="epoch",
+        # --save-steps N: a resumable Trainer checkpoint every N steps, two
+        # kept (each is adapter + optimiser state, ~5 GB at rank 128), so a
+        # preempted VM resumes from at most N steps back. 0 keeps the old
+        # epoch-end checkpoints only.
+        save_strategy="steps" if a.save_steps else "epoch",
+        save_steps=a.save_steps or 500,
+        save_total_limit=2 if a.save_steps else None,
         eval_strategy="epoch" if val else "no",
         # bf16 where the card supports it (Ampere and later); fp16 otherwise.
         # bf16 has the same range as fp32 and removes the overflow that makes
@@ -632,8 +664,30 @@ def main(argv=None):
 
     trainer.add_callback(SaveBeforeEval())
 
+    if a.time_tokens and a.time_rows == "delta":
+        from .timetokens import restore_deltas, save_deltas
+
+        class DeltasWithCheckpoint(TrainerCallback):
+            """The timestamp deltas are plain parameters PEFT does not save, so
+            a Trainer checkpoint alone would resume with the deltas back at
+            zero and the scheme silently inert. Write them into every
+            checkpoint directory as save_deltas does for the final adapter."""
+            def on_save(self, args, state, control, model=None, **kw):
+                ck = os.path.join(args.output_dir, f"checkpoint-{state.global_step}")
+                if os.path.isdir(ck):
+                    save_deltas(model, ck)
+                return control
+
+        trainer.add_callback(DeltasWithCheckpoint())
+
+    resume = latest_checkpoint(a.out) if a.resume == "auto" else None
+    if resume:
+        print(f"[train] resuming from {resume}", flush=True)
+        if a.time_tokens and a.time_rows == "delta":
+            restore_deltas(model, resume)
+
     try:
-        result = trainer.train()
+        result = trainer.train(resume_from_checkpoint=resume)
     except Exception:
         if trainer.state.global_step > 0:
             model.save_pretrained(a.out)
@@ -677,6 +731,13 @@ def main(argv=None):
 
     model.save_pretrained(a.out)
     processor.save_pretrained(a.out)
+    # The completion marker. The epoch-end adapter file is written mid-run too,
+    # so a runner that skipped on it would treat a preempted run as finished.
+    with open(os.path.join(a.out, DONE_FILE), "w") as f:
+        json.dump({"steps": trainer.state.global_step, "epochs": a.epochs,
+                   "loss_first": losses[0] if losses else None,
+                   "loss_last": losses[-1] if losses else None,
+                   "resumed_from": os.path.basename(resume) if resume else None}, f)
     print(f"[train] adapter saved to {a.out}")
 
 
