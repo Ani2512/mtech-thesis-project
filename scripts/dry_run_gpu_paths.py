@@ -111,8 +111,14 @@ def main():
                                                        "--val", f"{bench}/sft_transcribe_val.jsonl", "--out", f"{work}/lora_transcribe"], root)
     sh("transcribe with the adapter", py + ["ctag.run_transcribe", "--model", "qwen2.5-omni", "--model-id", str(model_dir),
                                             "--adapter", f"{work}/lora_transcribe", "--precision", "bf16", "--max-new-tokens", "24",
+                                            "--stop-probs",
                                             "--bench", f"{bench}/benchmark_test.jsonl", "--timelines", f"{bench}/timelines.jsonl",
                                             "--out", f"{work}/runs/transcribe_test"], root)
+    first = json.loads(open(f"{work}/runs/transcribe_test/pred_timelines.jsonl").readline())
+    assert "stop_probs" in first and isinstance(first["stop_probs"], list), first.keys()
+    assert all(p is None or 0.0 <= p <= 1.0 for p in first["stop_probs"]), first["stop_probs"]
+    sh("trailing check on the stop probabilities", py + ["ctag.trailing", "--pred-timelines", f"{work}/runs/transcribe_test/pred_timelines.jsonl",
+                                                          "--timelines", f"{bench}/timelines.jsonl", "--rule", "stop", "--sweep", "0.1", "0.5"], root)
     sh("queries from the timelines", py + ["ctag.run_agent", "--grounder", "timeline", "--pred-timelines", f"{work}/runs/transcribe_test/pred_timelines.jsonl",
                                            "--bench", f"{bench}/benchmark_test.jsonl", "--out", f"{work}/runs/test_from_timeline"], root)
     sh("direct prompting with the adapter", py + ["ctag.run_zeroshot", "--model", "qwen2.5-omni", "--model-id", str(model_dir),

@@ -169,7 +169,10 @@ class Qwen25OmniBackend:
         else:
             self.processor = Qwen2_5OmniProcessor.from_pretrained(model_id)
 
-    def ground(self, audio_path, query_text, query=None, duration=None, temperature=None):
+    def ground(self, audio_path, query_text, query=None, duration=None, temperature=None,
+               return_stop_probs=False):
+        """With return_stop_probs, returns (text, stop_probs): the model's
+        P(stop) before each event of a timeline answer, see ctag.stopprob."""
         from qwen_omni_utils import process_mm_info
 
         conv = [
@@ -190,9 +193,16 @@ class Qwen25OmniBackend:
             # which is what we want and which skips the broken branch.
             gen = ({"do_sample": True, "temperature": temperature} if temperature
                    else {"do_sample": False})
-            ids = self.model.thinker.generate(**inputs, max_new_tokens=self.max_new_tokens, **gen)
-        ids = ids[:, inputs["input_ids"].shape[1]:]
-        return self.processor.batch_decode(ids, skip_special_tokens=True)[0].strip()
+            if return_stop_probs:
+                gen.update(output_scores=True, return_dict_in_generate=True)
+            res = self.model.thinker.generate(**inputs, max_new_tokens=self.max_new_tokens, **gen)
+        ids = (res.sequences if return_stop_probs else res)[:, inputs["input_ids"].shape[1]:]
+        text = self.processor.batch_decode(ids, skip_special_tokens=True)[0].strip()
+        if return_stop_probs:
+            from .stopprob import stop_probs
+
+            return text, stop_probs(self.processor.tokenizer, ids[0].tolist(), res.scores)
+        return text
 
 
 class Qwen2AudioBackend:

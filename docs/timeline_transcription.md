@@ -34,6 +34,8 @@ parser and scorer normalise both sides (`ctag.agent._norm`).
 | training set: one example per clip | `python -m ctag.sft_data --task transcribe --timelines ... --bench benchmark_train.jsonl --out sft_transcribe.jsonl` |
 | transcribe + score clips (CPU mock or a model) | `python -m ctag.run_transcribe --model mock:oracle|qwen2.5-omni [--adapter ...] --bench ... --timelines ... --out ...` |
 | every query type from predicted timelines, no model calls | `python -m ctag.run_agent --grounder timeline --pred-timelines <out>/pred_timelines.jsonl --bench ... --out ...` |
+| P(stop) before each event, from the generation scores | `python -m ctag.run_transcribe ... --stop-probs` (field `stop_probs`, generation order; `ctag/stopprob.py`) |
+| trailing-event check: drop the last emitted event by IoU / silence / P(stop), scored against gold | `python -m ctag.trailing --pred-timelines ... --timelines ... --rule stop --tune-on <val preds> --sweep 0.05 0.1 0.3 --out ...` |
 | large training set with hard cases | `python -m ctag.gen_train --source esc50 --n-clips 20000 --hard --workers 8 --out data/gen_esc50 --esc50-root data/esc50_raw` |
 
 The scorer reports event-level precision, recall and F1 with **label-aware**

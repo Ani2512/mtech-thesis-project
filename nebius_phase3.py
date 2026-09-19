@@ -25,6 +25,8 @@ Knobs (environment variables, all optional):
                      on the same generated questions, same epochs, same card    (1)
     CTAG_ARM_E_N     question examples for that comparison                        (20000)
     CTAG_ARM_E_ARMS  text | tt | both   which of the two to train and evaluate      (both)
+    CTAG_STOP_PROBS  1 | 0              rerun transcription with P(stop) per event and
+                                        run the trailing check (ctag.trailing)      (1)
                      text = arm C at scale only: the end-to-end control for the
                      timeline result (same data scale, precision, rank and epochs,
                      but the compositional question as the target), plus arm F at
@@ -179,6 +181,25 @@ for split, tag in ((VAL, "val"), (TEST, "test")):
               "--bench", split, "--out", f"runs/esc50/{tag}_from_timeline_refined"],
         f"runs/esc50/{tag}_from_timeline_refined/summary.json")
 
+# trailing-event check (ctag.trailing): transcribe again recording the model's
+# P(stop) before each event, pick the threshold on val, apply it to test.
+# CTAG_STOP_PROBS=0 skips the rerun (about as long as the first transcription).
+if os.environ.get("CTAG_STOP_PROBS", "1") == "1":
+    for split, tag in ((VAL, "val"), (TEST, "test")):
+        run(f"transcribe {tag} clips with stop probabilities",
+            py + ["ctag.run_transcribe", "--model", "qwen2.5-omni", "--adapter", ADAPTER, "--precision", PRECISION, "--stop-probs",
+                  "--bench", split, "--timelines", f"{BENCH}/timelines.jsonl", "--out", f"runs/esc50/transcribe_{tag}_stop"],
+            f"runs/esc50/transcribe_{tag}_stop/summary.json")
+    run("trailing check: threshold from val, applied to test",
+        py + ["ctag.trailing", "--rule", "stop", "--pred-timelines", "runs/esc50/transcribe_test_stop/pred_timelines.jsonl",
+              "--tune-on", "runs/esc50/transcribe_val_stop/pred_timelines.jsonl", "--timelines", f"{BENCH}/timelines.jsonl",
+              "--sweep", "0.02", "0.05", "0.1", "0.2", "0.3", "0.5", "0.7", "--out", "runs/esc50/transcribe_test_trailing"],
+        "runs/esc50/transcribe_test_trailing/summary.json")
+    run("every query type from the trailing-checked test timelines",
+        py + ["ctag.run_agent", "--grounder", "timeline", "--pred-timelines", "runs/esc50/transcribe_test_trailing/pred_timelines.jsonl",
+              "--bench", TEST, "--out", "runs/esc50/test_from_timeline_trailing"],
+        "runs/esc50/test_from_timeline_trailing/summary.json")
+
 # the same adapter asked the phase 2 way, for a like-for-like reference row
 run("direct prompting with the transcription adapter (reference)",
     py + ["ctag.run_zeroshot", "--model", "qwen2.5-omni", "--adapter", ADAPTER, "--precision", PRECISION,
@@ -259,6 +280,11 @@ if r and "after" in r:
     print(f"test  refined: event F1 {num(r['before']['event_f1_pooled'])} -> {num(r['after']['event_f1_pooled'])}  "
           f"duration ratio {num(r['before']['duration_ratio_median'])} -> {num(r['after']['duration_ratio_median'])}  "
           f"edges moved {r['edges_moved']}")
+tr = load("runs/esc50/transcribe_test_trailing/summary.json")
+if tr and tr.get("after"):
+    c = tr["confusion"]
+    print(f"test  trailing check (thr {tr['thr']}): event F1 {num(tr['before']['event_f1_pooled'])} -> {num(tr['after']['event_f1_pooled'])}  "
+          f"removed spurious {c['removed_spurious']} correct {c['removed_correct']} of {c['spurious_last_events']} spurious last events")
 types = ["PLAIN", "ORDINAL", "AFTER", "BEFORE", "NEXT_AFTER", "WHILE", "NOT_FOLLOWED", "ALL"]
 if q:
     print("test  f1@0.5 from the timeline: " + "  ".join(f"{ty} {q['by_type'][ty]['f1@0.5']:.3f}" for ty in types if ty in q["by_type"]))

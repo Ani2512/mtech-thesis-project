@@ -180,8 +180,11 @@ GPU utilisation sat at 62-100%; audio decoding (2 loader workers) is the likely 
 1. Error analysis: DONE, see `error_analysis_phase3.md` (10 of 100 val+test clips
    imperfect, all count errors: quiet sounds dropped inside overlaps, duplicate events
    appended at the end of the list; no timing errors).
-2. Arm E retest at ARM_E_N=4,000 on a preemptible L40S with the resume support (about $4).
-3. DESED public-eval: hand review, then `run_transcribe --timelines data/desed/timelines.jsonl`
+2. Trailing-event check on the model's P(stop) (`ctag.trailing`, runner `CTAG_STOP_PROBS`):
+   geometry and energy rules are measured negatives; the stop-probability rule needs one
+   rerun of the 100-clip transcription on the next VM session.
+3. Arm E retest at ARM_E_N=4,000 on a preemptible L40S with the resume support (about $4).
+4. DESED public-eval: hand review, then `run_transcribe --timelines data/desed/timelines.jsonl`
    with this adapter, for the composed-vs-real number.
-4. SED ceiling arm (a conventional sound-event-detection model on the same clips).
-5. The report's phase 3 chapter (done alongside this file) and deck slides 13-14.
+5. SED ceiling arm (a conventional sound-event-detection model on the same clips).
+6. The report's phase 3 chapter (done alongside this file) and deck slides 13-14.

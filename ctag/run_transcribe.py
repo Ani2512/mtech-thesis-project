@@ -48,10 +48,12 @@ def load_timelines(path: Path) -> dict:
 
 
 def mock_transcriber(gold: dict, jitter: float = 0.0, drop: float = 0.0, spurious: float = 0.0,
-                     relabel: float = 0.0, seed: int = 0):
+                     relabel: float = 0.0, seed: int = 0, stop_probs: bool = False):
     """Reads the gold timeline and degrades it: dropped events, moved edges,
     invented events, and wrong names. Emits the exact target string so the
-    parser is exercised too."""
+    parser is exercised too. With stop_probs, also returns a made-up P(stop)
+    per emitted event (low for real events, high before the invented one) so
+    the --stop-probs path and ctag.trailing run on the CPU."""
     from .transcribe import target_timeline
 
     rng = random.Random(seed)
@@ -69,16 +71,21 @@ def mock_transcriber(gold: dict, jitter: float = 0.0, drop: float = 0.0, spuriou
             lab = e["label"]
             if relabel and rng.random() < relabel:
                 lab = rng.choice([v for v in vocab if v != lab] or [lab])
-            evs.append({"label": lab, "onset": a, "offset": b})
+            evs.append({"label": lab, "onset": a, "offset": b, "invented": False})
         if spurious and rng.random() < spurious:
             s = rng.uniform(0, max(1.0, (duration or 20.0) - 2))
-            evs.append({"label": rng.choice(vocab), "onset": s, "offset": s + rng.uniform(0.3, 2.0)})
-        return target_timeline(evs)
+            evs.append({"label": rng.choice(vocab), "onset": s, "offset": s + rng.uniform(0.3, 2.0), "invented": True})
+        text = target_timeline(evs)
+        if not stop_probs:
+            return text
+        # generation order is the target's sorted order
+        order = sorted(evs, key=lambda e: (round(e["onset"], 2), round(e["offset"], 2), _norm(e["label"])))
+        return text, [0.7 if e["invented"] else rng.uniform(0.0, 0.05) for e in order]
 
     return t
 
 
-def model_transcriber(name: str, vocab: list[str] | None, **kw):
+def model_transcriber(name: str, vocab: list[str] | None, stop_probs: bool = False, **kw):
     """`max_new_tokens` matters here: a ten-event timeline is ~250 tokens and the
     backends default to 96, which would cut the list short and read as
     under-reporting. main() sets it from --max-new-tokens (default 512)."""
@@ -88,6 +95,8 @@ def model_transcriber(name: str, vocab: list[str] | None, **kw):
     q = transcribe_query(vocab)
 
     def t(clip_id: str, audio: str, duration):
+        if stop_probs:
+            return backend.ground(audio, q, query=None, duration=duration, return_stop_probs=True)
         return backend.ground(audio, q, query=None, duration=duration)
 
     return t
@@ -112,12 +121,14 @@ def main(argv=None):
     ap.add_argument("--spurious", type=float, default=0.0, help="mock: probability of one invented event")
     ap.add_argument("--relabel", type=float, default=0.0, help="mock: probability of a wrong name")
     ap.add_argument("--seed", type=int, default=0)
+    ap.add_argument("--stop-probs", action="store_true",
+                    help="also record the model's P(stop) before each event (ctag.stopprob), for ctag.trailing")
     a = ap.parse_args(argv)
 
     gold = load_timelines(Path(a.timelines))
     vocab = None if a.no_vocab_in_prompt else sorted({e["label"] for d in gold.values() for e in d["events"]})
     if a.model == "mock:oracle":
-        t = mock_transcriber(gold, a.jitter, a.drop, a.spurious, a.relabel, a.seed)
+        t = mock_transcriber(gold, a.jitter, a.drop, a.spurious, a.relabel, a.seed, a.stop_probs)
         label = f"transcribe:mock(j={a.jitter},d={a.drop},s={a.spurious},r={a.relabel})"
     else:
         kw = {"max_new_tokens": a.max_new_tokens}
@@ -129,7 +140,9 @@ def main(argv=None):
             if a.model != "qwen2.5-omni":
                 raise SystemExit("--adapter is only wired for the qwen2.5-omni backend")
             kw["adapter"] = a.adapter
-        t = model_transcriber(a.model, vocab, **kw)
+        if a.stop_probs and a.model != "qwen2.5-omni":
+            raise SystemExit("--stop-probs is only wired for the qwen2.5-omni backend")
+        t = model_transcriber(a.model, vocab, a.stop_probs, **kw)
         label = f"transcribe:{a.model}" + ("+lora" if a.adapter else "")
 
     out = Path(a.out)
@@ -141,11 +154,16 @@ def main(argv=None):
     with open(out / "pred_timelines.jsonl", "w", encoding="utf-8") as fo:
         for k, (cid, audio, duration) in enumerate(clips):
             raw = t(cid, audio, duration)
+            probs = None
+            if a.stop_probs:
+                raw, probs = raw
             pred = parse_timeline(raw)
             gold_ev = [(_norm(e["label"]), e["onset"], e["offset"]) for e in gold.get(cid, {}).get("events", [])]
             s = score_timeline(pred, gold_ev, a.iou)
             row = {"clip_id": cid, "audio": audio, "duration": duration,
                    "events": events_to_dicts(pred or []), "raw": raw, **s}
+            if a.stop_probs:
+                row["stop_probs"] = probs      # generation order; ctag.trailing aligns them
             rows.append(row)
             fo.write(json.dumps(row, ensure_ascii=False) + "\n")
             if (k + 1) % 50 == 0:
