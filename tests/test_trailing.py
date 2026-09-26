@@ -151,3 +151,30 @@ def test_tune_on_picks_the_threshold_on_val_and_applies_it(tmp_path):
     assert "chosen thr=0.10" in r.stdout or "chosen thr=0.50" in r.stdout, r.stdout   # 0.9 never fires on the mock's 0.7
     s = json.loads((tmp_path / "f" / "summary.json").read_text())
     assert s["confusion"]["removed_correct"] == 0 and s["thr"] < 0.9
+
+
+def test_trailing_reports_survive_unparseable_predictions(tmp_path):
+    """The GPU dry run's random model produces no readable timeline, so every
+    pooled metric is None; the report must say n/a, not crash the runner step."""
+    import json
+    import subprocess
+    import sys
+    # exactly what run_transcribe writes for a row whose answer could not be read
+    rows = [{"clip_id": "c0", "audio": "", "duration": 20.0, "events": [], "raw": "garbage", "stop_probs": [],
+             "parse_fail": True, "precision": 0.0, "recall": 0.0, "f1": 0.0, "f1_any_label": 0.0,
+             "n_pred": 0, "n_gold": 1, "count_acc": False, "centre_errors": [], "duration_ratio": None,
+             "label_hits": {"dog": [0, 1]}}]
+    p = tmp_path / "pred.jsonl"
+    p.write_text("\n".join(json.dumps(r) for r in rows) + "\n")
+    gold = tmp_path / "gold.jsonl"
+    gold.write_text(json.dumps({"clip_id": "c0", "audio": "", "duration": 20.0,
+                                "events": [{"label": "dog", "onset": 1.0, "offset": 2.0}]}) + "\n")
+    r = subprocess.run([sys.executable, "-m", "ctag.trailing", "--rule", "stop", "--pred-timelines", str(p),
+                        "--timelines", str(gold), "--sweep", "0.1", "0.5", "--out", str(tmp_path / "o")],
+                       capture_output=True, text=True)
+    assert r.returncode == 0, r.stderr[-800:]
+    assert "n/a" in r.stdout
+    r = subprocess.run([sys.executable, "-m", "ctag.trailing", "--rule", "stop", "--pred-timelines", str(p),
+                        "--timelines", str(gold), "--tune-on", str(p), "--sweep", "0.1", "0.5", "--out", str(tmp_path / "o2")],
+                       capture_output=True, text=True)
+    assert r.returncode == 0, r.stderr[-800:]

@@ -171,6 +171,12 @@ def load_gold(path: Path | None) -> dict | None:
     return {d["clip_id"]: d for d in (json.loads(l) for l in open(path, encoding="utf-8"))}
 
 
+def _f(x, nd=4):
+    """Format a metric that may be None (every clip unparseable, e.g. the dry
+    run's random model) without crashing the whole step."""
+    return f"{x:.{nd}f}" if isinstance(x, (int, float)) else "n/a"
+
+
 def main(argv=None):
     ap = argparse.ArgumentParser()
     ap.add_argument("--pred-timelines", required=True, help="pred_timelines.jsonl from ctag.run_transcribe")
@@ -197,10 +203,10 @@ def main(argv=None):
         for thr in a.sweep:
             new, conf = apply_rule(val_rows, a.rule, thr, gold, a.iou, a.audio_root)
             f1 = summarize_timelines(new)["event_f1_pooled"]
-            print(f"tune thr={thr:.2f} val event_f1_pooled {base:.4f} -> {f1:.4f} fired={conf['fired']} "
+            print(f"tune thr={thr:.2f} val event_f1_pooled {_f(base)} -> {_f(f1)} fired={conf['fired']} "
                   f"rm_spur={conf['removed_spurious']} rm_corr={conf['removed_correct']}")
             # strictly better than no filter, then the highest F1, then the fewest removals
-            if f1 > base and (best is None or (f1, -conf["fired"]) > (best[1], -best[2])):
+            if base is not None and f1 is not None and f1 > base and (best is None or (f1, -conf["fired"]) > (best[1], -best[2])):
                 best = (thr, f1, conf["fired"])
         if best is None:
             print("no threshold improves val; the filter stays off (thr=inf)")
@@ -211,13 +217,13 @@ def main(argv=None):
         a.sweep = None
     if a.sweep is not None:
         if before:
-            print(f"before: event_f1_pooled={before['event_f1_pooled']:.4f} count_acc={before['count_acc']:.3f}")
+            print(f"before: event_f1_pooled={_f(before.get('event_f1_pooled'))} count_acc={_f(before.get('count_acc'), 3)}")
         print(f"{'thr':>6} {'fired':>5} {'rm_spur':>7} {'rm_corr':>7} {'f1_pooled':>9} {'count_acc':>9}")
         for thr in a.sweep:
             new, conf = apply_rule(rows, a.rule, thr, gold, a.iou, a.audio_root)
             s = summarize_timelines(new) if gold else {}
             print(f"{thr:6.2f} {conf['fired']:5d} {conf['removed_spurious']:7d} {conf['removed_correct']:7d} "
-                  f"{s.get('event_f1_pooled', float('nan')):9.4f} {s.get('count_acc', float('nan')):9.3f}")
+                  f"{_f(s.get('event_f1_pooled')):>9} {_f(s.get('count_acc'), 3):>9}")
         return
     new, conf = apply_rule(rows, a.rule, a.thr, gold, a.iou, a.audio_root)
     if a.out:
@@ -233,8 +239,8 @@ def main(argv=None):
     msg = f"rule={a.rule} thr={a.thr} fired={conf['fired']}"
     if gold:
         msg += (f" removed_spurious={conf['removed_spurious']} removed_correct={conf['removed_correct']}"
-                f" event_f1_pooled {before['event_f1_pooled']:.4f} -> {after['event_f1_pooled']:.4f}"
-                f" count_acc {before['count_acc']:.3f} -> {after['count_acc']:.3f}")
+                f" event_f1_pooled {_f(before.get('event_f1_pooled'))} -> {_f(after.get('event_f1_pooled'))}"
+                f" count_acc {_f(before.get('count_acc'), 3)} -> {_f(after.get('count_acc'), 3)}")
     print(msg)
 
 
