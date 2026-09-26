@@ -19,13 +19,13 @@ case "$mode" in
       [ -d "runs_nebius_phase3/$d" ] || { echo "missing runs_nebius_phase3/$d (pull first)" >&2; exit 1; }
     done
     $SSH "ubuntu@$ip" 'mkdir -p ~/mtech-thesis-project/runs'
-    rsync -az --info=progress2 "${EXCL[@]}" -e "$SSH" runs_nebius_phase3/lora_transcribe runs_nebius_phase3/esc50 \
+    rsync -az "${EXCL[@]}" -e "$SSH" runs_nebius_phase3/lora_transcribe runs_nebius_phase3/esc50 \
       "ubuntu@$ip:mtech-thesis-project/runs/"
     $SSH "ubuntu@$ip" 'ls ~/mtech-thesis-project/runs/lora_transcribe/train_done.json ~/mtech-thesis-project/runs/lora_transcribe/tokenizer_config.json 2>/dev/null | head -1; ls ~/mtech-thesis-project/runs/esc50'
     ;;
   pull)
     mkdir -p runs_nebius_phase3
-    rsync -az --info=progress2 "${EXCL[@]}" -e "$SSH" "ubuntu@$ip:phase3_results/" runs_nebius_phase3/
+    rsync -az "${EXCL[@]}" -e "$SSH" "ubuntu@$ip:phase3_results/" runs_nebius_phase3/
     du -sh runs_nebius_phase3; ls runs_nebius_phase3/esc50
     ;;
   *) echo "usage: $0 push|pull <ip>" >&2; exit 2;;
