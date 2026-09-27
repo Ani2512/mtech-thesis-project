@@ -147,6 +147,14 @@ answered "nothing" on 0 of the 197 empty-answer questions (0.733 over all typed
 questions vs 0.982), so the wrong-"nothing" elimination is the structural part. 441 min
 of training at 3.45 s/step with bs 4 x accum 2, no preemption in 23 h, about $21 in all.
 
+## DESED real recordings (`nebius_desed.py`)
+
+After the phase 3 runs the VM's disk holds both adapters. `scripts/nebius_sync.sh
+push-desed <ip>` copies the questions and the 692 wav files (1.1 GB), then
+`nohup python nebius_desed.py > logs/desed.log 2>&1 &` runs the five evaluation
+steps (about 4 h, resumable) and `scripts/nebius_sync.sh pull <ip>` brings
+`runs/desed` back. Details and the hand-review sample: `real_recordings.md`.
+
 ## Arm E retest (in the runner, `CTAG_ARM_E=1`, default on)
 
 Phase 2's time-symbol arm lost to text digits (0.194 vs 0.530) under T4

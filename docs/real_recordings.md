@@ -72,6 +72,74 @@ Counts on the metadata alone (2026-09-15, `--max-per-type 2 --min-overlap 0.3`):
 | validation | 8,179 | 1,709 | 1,542 | 587 | 587 | 587 | 902 | 1,112 | 1,153 | 210 |
 | public eval | 4,948 | 1,047 | 866 | 377 | 377 | 377 | 502 | 710 | 692 | 208 |
 
+## Running the evaluation (`nebius_desed.py`, added 2026-09-27)
+
+Both adapters live on the Nebius VM (`runs/lora_q_text`, the question-trained
+arm C at scale; `runs/lora_transcribe`, the timeline adapter), and the Mac has
+neither the model nor the memory, so the evaluation runs there:
+
+```bash
+# Mac: the questions, the gold timelines and the 692 wav files (1.1 GB, once)
+scripts/nebius_sync.sh push-desed <ip>
+# VM (after the usual setup; the adapters are on the disk from the phase 3 runs)
+cd ~/mtech-thesis-project && source .venv/bin/activate && export HF_HOME=$PWD/hf_cache
+nohup python nebius_desed.py > logs/desed.log 2>&1 &
+tail -f logs/desed.log
+# Mac, afterwards
+scripts/nebius_sync.sh pull <ip>        # -> runs_nebius_phase3/desed/
+```
+
+Steps, in the order the report needs them, each skipped once its `summary.json`
+exists (rerun the same command after a preemption):
+
+| step | output | L40S estimate |
+|---|---|---|
+| arm C at scale asked directly, 4,948 questions | `runs/desed/public_q_text` | ~65 min |
+| arm F at scale, the same adapter inside the decomposition | `runs/desed/public_f_text` | ~25 min |
+| timeline adapter transcribes 692 clips (stop probabilities on) | `runs/desed/transcribe_public` | ~90 min |
+| every query type from the timelines, then after the trailing check at the ESC-50 threshold 0.02 | `public_from_timeline`, `public_from_timeline_trailing` | 1 min |
+| untrained model asked directly, first 700 questions (`CTAG_DESED_ZEROSHOT_N`) | `runs/desed/public_zeroshot` | ~50 min |
+
+About 4 h, $4 on a preemptible L40S. The table at the end prints, per method, the
+per-type f1@0.5 over answerable questions (the composed-benchmark convention) and,
+because real recordings have many empty answers, the mean over every typed
+question and the counts of gold-empty and absent-sound questions answered empty.
+
+`CTAG_DESED_BENCH=data/desed/public/benchmark_verified.jsonl` scores the reviewed
+subset instead, once `apply-review` has produced it. The runner fails early with
+the push command if the questions or the audio are missing on the VM.
+
+The timeline prompt lists the ten DESED names (from the gold timelines, as on
+ESC-50); labels are normalised on both sides (`Alarm_bell_ringing` = "alarm bell
+ringing"), so the adapters trained on the fourteen ESC-50 names are asked for
+sounds they have never been named, which is part of the test.
+
+CPU dry run of every path on the tiny random model (a few minutes):
+
+```bash
+python scripts/dry_run_gpu_paths.py --keep /tmp/dry      # builds the tiny model and adapters
+CTAG_MODEL_ID=/tmp/dry/model CTAG_Q_ADAPTER=/tmp/dry/lora_transcribe CTAG_T_ADAPTER=/tmp/dry/lora_transcribe \
+  CTAG_N=2 CTAG_DESED_ZEROSHOT_N=2 CTAG_DESED_OUT=/tmp/dry/desed CTAG_RESULTS=/tmp/dry/results python nebius_desed.py
+```
+
+## Hand review: the 300-question sample
+
+`scripts/desed_review_sample.py` picks a stratified sample from `review.csv`, 40
+per type and 20 ABSENT, at most two questions per clip, preferring questions
+whose target is not Speech (27 of 300 mention speech; the sample covers 201
+clips):
+
+```bash
+python scripts/desed_review_sample.py --review data/desed/public/review.csv \
+    --out data/desed/public/review_sample.csv --n 300 --seed 0
+```
+
+Review that file with the protocol below, then
+`ctag.real_data apply-review --review data/desed/public/review_sample.csv` gives
+`benchmark_verified.jsonl` with exactly the reviewed questions. The full 4,948
+are still scored (the runner's default); the verified subset is the number to
+quote.
+
 ## Verification protocol
 
 The plan targets ~300 verified clips. Review the public evaluation set first
