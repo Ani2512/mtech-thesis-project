@@ -141,6 +141,12 @@ Reading the result: near 0.55 (phase 2's arm C) means the timeline target is the
 result; near the timeline row means scale did most of it and the timeline route's
 contribution is the wrong-"nothing" elimination and one model call per clip.
 
+Measured 2026-09-26 (`results_nebius_phase3.md`, run 2): arm C at scale 0.951, arm F at
+scale 0.963, timeline 0.983 on answerable questions, so scale did most of it; but arm C
+answered "nothing" on 0 of the 197 empty-answer questions (0.733 over all typed
+questions vs 0.982), so the wrong-"nothing" elimination is the structural part. 441 min
+of training at 3.45 s/step with bs 4 x accum 2, no preemption in 23 h, about $21 in all.
+
 ## Arm E retest (in the runner, `CTAG_ARM_E=1`, default on)
 
 Phase 2's time-symbol arm lost to text digits (0.194 vs 0.530) under T4
