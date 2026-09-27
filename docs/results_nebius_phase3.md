@@ -123,7 +123,150 @@ to a neighbouring sound's onset. Report as a negative result; leave it off by de
 whole-clip timeline (`[{"sound": "dog", "start": 0.98, "end": 3.48}, ...]`), which the
 question parser rejects. This is the expected control: the adapter was trained on one target
 only, and the gain comes from the timeline route, not from the extra training on its own.
-A fair "direct" arm remains phase 2's arm C / C-enc (0.530 / 0.554).
+A fair "direct" arm at this scale is arm C at scale below (run 2): 0.951 on answerable questions,
+0.000 on the 197 empty-answer ones.
+
+## Run 2 (2026-09-26): arm C and arm F at scale, the trailing check
+
+Preemptible L40S (`computeinstance-e00s9ekmwbsya6907n`, 195.242.29.105, $0.90/h), fresh
+disk, bootstrapped from `main` and run on `fix/trailing-none-format` = e176ca3 (merged as
+PR #18, 64742fb). Launched 2026-09-26 ~05:10 UTC, finished ~20:25 UTC the same day, no
+preemption (the VM was up 23 h by the time the results were pulled). Knobs: `CTAG_ARM_E=1 CTAG_ARM_E_ARMS=text CTAG_SAVE_STEPS=100 CTAG_BS=4
+CTAG_ACCUM=2`. The transcription adapter and its evaluations were pushed from the Mac
+(`scripts/nebius_sync.sh push`) so the runner skipped them. Two bugs surfaced on the way in,
+both fixed in PR #18: the trailing step crashed when every clip was unparseable (the dry run's
+random model) and the sync script's `--info=progress2` is unknown to macOS's rsync.
+
+```
+--- smoke train (20 steps): ok in 8 min
+--- transcribe val clips with stop probabilities: ok in 5 min
+--- transcribe test clips with stop probabilities: ok in 4 min
+--- trailing check: threshold from val, applied to test: ok in 0 min
+--- SFT: question targets (text): ok in 0 min        (20,000 ex: 11,965 plain, 8,035 conditional, 3,000 empty targets = 15%)
+--- SFT: question targets for val (text): ok in 0 min (600 ex)
+--- train arm C at scale (text digits): ok in 441 min (7,500 steps, 3.45 s/step, checkpoint every 100)
+--- eval arm C at scale on test: ok in 9 min          (699 q, one call each)
+--- eval arm F at scale on test: ok in 3 min          (699 q, decomposition over the arm C adapter)
+```
+
+Arm C at scale is the control the phase 3 result needed: the same 20,000 generated clips,
+the same recipe (rank 128, bf16, 3 epochs, encoder trained), the same prompt byte for byte,
+with the *question* as the training target instead of the timeline. Arm F at scale is that
+adapter as the per-sound grounder inside the decomposition.
+
+### Training curve, arm C at scale
+
+| point | train loss (logged) | val loss (600 val questions) |
+|---|---|---|
+| step 10 | 0.76 | |
+| end of epoch 1 (step 2,500) | 0.7-1.2 | 0.525 |
+| end of epoch 2 (step 5,000) | 0.5-1.4 | 0.429 |
+| end of epoch 3 (step 7,500) | 1.03 (last logged) | 0.422 |
+
+The question target does not converge the way the timeline target did (val loss 0.025 at
+the end): each example is one short answer whose tokens are mostly digits, so the loss stays
+near 1 per token even when the intervals are right. Grad norm 0.4-1.5 throughout, no nan.
+
+### The three-way comparison (test, f1@0.5, answerable questions)
+
+Same 699 test questions, same metric as every table above: per-type scores over the
+questions that have an answer (502), as the runner prints them.
+
+```
+                                           PLAIN ORDINAL AFTER BEFORE NEXT_AFTER WHILE NOT_FOLLOWED ALL    empty-answer rate
+timeline route (run 1)                     0.992 0.963   0.997 1.000  1.000      0.961 0.974        0.983  0.00 (rejection f1 1.000)
+arm C at scale, asked directly             0.979 0.887   0.981 0.970  0.984      0.928 0.935        0.951  0.00 (rejection f1 0.000)
+arm F at scale, arm C inside decomposition 0.982 0.950   0.983 0.986  0.968      0.907 0.959        0.963  0.02
+
+f_beta                                     PLAIN ORDINAL AFTER BEFORE NEXT_AFTER WHILE NOT_FOLLOWED
+timeline                                   0.993 0.963   0.999 1.000  1.000      0.958 0.977
+arm C at scale                             0.976 0.887   0.981 0.978  0.984      0.928 0.945
+arm F at scale                             0.977 0.950   0.982 0.984  0.968      0.898 0.957
+
+count_acc                                  PLAIN ORDINAL AFTER BEFORE NEXT_AFTER WHILE NOT_FOLLOWED
+timeline                                   0.969 0.979   0.978 1.000  1.000      0.948 0.958
+arm C at scale                             0.948 0.833   0.708 0.618  0.708      0.594 0.615
+arm F at scale                             0.958 0.969   0.978 0.966  1.000      0.906 0.927
+```
+
+Against phase 2 (`results_kaggle_v6.md`, same questions, T4, rank 16, 4-bit, ~2,000 clips):
+
+```
+                        PLAIN ORDINAL AFTER BEFORE NEXT_AFTER WHILE NOT_FOLLOWED ALL
+C-enc (phase 2)         0.764 0.450   0.821 0.696  0.667      0.257 0.208        0.554
+C at scale (phase 3)    0.979 0.887   0.981 0.970  0.984      0.928 0.935        0.951
+F-hybrid (phase 2)      0.763 0.575   0.780 0.639  0.587      0.464 0.666        0.645
+F at scale (phase 3)    0.982 0.950   0.983 0.986  0.968      0.907 0.959        0.963
+timeline (phase 3)      0.992 0.963   0.997 1.000  1.000      0.961 0.974        0.983
+```
+
+**Reading.** Scale did most of the lift: the direct arm went from 0.554 to 0.951 on the same
+recipe as the timeline adapter, so the phase 2 -> phase 3 jump is mostly data, rank and
+precision. The timeline target still wins on all seven types against both arms, by 0.032 overall
+over arm C and by 0.076 on ORDINAL, 0.039 on NOT_FOLLOWED, 0.033 on WHILE; the gaps are on the compositional
+types, and the count accuracy shows why: asked directly, the adapter gets the *first*
+occurrence and drops the rest (count_acc 0.59-0.71 on the conditional types against
+0.95-1.00 from the timeline). Decomposition over the arm C adapter recovers most of the count
+loss (ORDINAL 0.887 -> 0.950, count_acc back to 0.91-1.00) but loses on WHILE and NEXT_AFTER,
+where the combine step inherits the grounder's boundary errors twice.
+
+### Arm C never says "nothing": the empty answer, 197 of 699 questions
+
+The per-type f1 above is over answerable questions, the phase 2 convention. The test set
+also has 197 questions whose correct answer is empty: 48 ABSENT rejection queries (a sound
+that is not in the clip) and 149 conditional questions whose condition is never met
+("the next siren once the door wood knock has ended", when no knock precedes a siren).
+
+```
+                 gold-empty questions answered empty   f1@0.5 over all 651 typed questions (7 types)
+timeline route   146 / 149 conditional, 48 / 48 ABSENT   0.982
+arm C at scale     0 / 149,               0 / 48        0.733
+arm F at scale   148 / 149,               0 / 48        0.970
+```
+
+The arm C adapter at scale emitted `[]` on **zero** of the 699 test questions. Its raw output
+on "all occurrences of train", with no train in the clip, is `[[4.83, 7.33]]`: it invents an
+interval for a sound that is not there. This is with 3,000 empty targets (15%) in its training
+set and the prompt byte-identical to training, so it is the model's behaviour, not a format
+mismatch. It is the *opposite* failure from phase 2, where the same arm at small scale
+rejected too often (false rejection 29%, arm E answered empty on 73%); at scale with the
+empty share capped at 15% the interval answer wins every time. Either way, the direct arm
+does not know when to say nothing; the timeline route gets rejection right by construction
+(the sound is either in the transcript or it is not). Decomposition over the arm C adapter
+gets the 149 conditional empties right because the combine step, not the model, decides
+emptiness, but still fails all 48 ABSENT queries: a plain query on a missing sound goes
+straight to the grounder, which invents the interval.
+
+So the honest summary of the control is two sentences. On questions that have an answer,
+scale closes most of the gap and the timeline target adds 0.03. On the third of the questions
+whose answer is "nothing", the direct arm scores zero and the timeline route scores 0.98,
+and that difference (0.982 vs 0.733 over all typed questions) is structural, not a matter of
+more data.
+
+### Trailing-event check: positive, small
+
+`ctag.trailing --rule stop`, P(stop) from the generation scores (PR #17), threshold tuned on
+val, applied to test:
+
+```
+tune thr=0.02..0.30  val event_f1_pooled 0.9917 -> 0.9933  fired=3  rm_spur=2 rm_corr=1
+tune thr=0.50, 0.70  no change (fired=0)
+test  rule=stop thr=0.02  fired=4  removed_spurious=4  removed_correct=0
+      event_f1_pooled 0.989 -> 0.996   count_acc 0.917 -> 0.958
+```
+
+On test it removed all 4 spurious trailing events and no correct one, and the query types
+from the trailing-checked test timelines improve with it, the best row of the project so far:
+
+```
+f1@0.5 (test, from the trailing-checked timelines)
+PLAIN ORDINAL AFTER BEFORE NEXT_AFTER WHILE NOT_FOLLOWED ALL
+0.997 0.975   1.000 1.000  1.000      0.961 0.991        0.989   (was 0.992 0.963 0.997 1.000 1.000 0.961 0.974 0.983)
+```
+
+Cheap (one extra transcription
+pass with scores), positive on both splits, worth keeping on. The val tuning is flat from 0.02
+to 0.30, so the threshold is not sensitive.
 
 ## First GPU run of the phase 3 code: three bugs, all invisible on CPU
 
@@ -180,11 +323,14 @@ GPU utilisation sat at 62-100%; audio decoding (2 loader workers) is the likely 
 1. Error analysis: DONE, see `error_analysis_phase3.md` (10 of 100 val+test clips
    imperfect, all count errors: quiet sounds dropped inside overlaps, duplicate events
    appended at the end of the list; no timing errors).
-2. Trailing-event check on the model's P(stop) (`ctag.trailing`, runner `CTAG_STOP_PROBS`):
-   geometry and energy rules are measured negatives; the stop-probability rule needs one
-   rerun of the 100-clip transcription on the next VM session.
-3. Arm E retest at ARM_E_N=4,000 on a preemptible L40S with the resume support (about $4).
-4. DESED public-eval: hand review, then `run_transcribe --timelines data/desed/timelines.jsonl`
+2. Trailing-event check: DONE (run 2 above), positive: test event F1 0.989 -> 0.996, 4 of 4
+   spurious last events removed, 0 correct ones; query types ALL 0.983 -> 0.989.
+3. Arm C and arm F at scale: DONE (run 2 above). Scale explains most of the gain on
+   answerable questions (0.554 -> 0.951); the timeline target adds 0.03 there and 0.25 over
+   all typed questions, because the direct arm never answers "nothing".
+4. Arm E retest (time symbols at scale): still deferred; about 7.5 h on a preemptible L40S
+   with `CTAG_ARM_E_ARMS=tt`.
+5. DESED public-eval: hand review, then `run_transcribe --timelines data/desed/timelines.jsonl`
    with this adapter, for the composed-vs-real number.
-5. SED ceiling arm (a conventional sound-event-detection model on the same clips).
-6. The report's phase 3 chapter (done alongside this file) and deck slides 13-14.
+6. SED ceiling arm (a conventional sound-event-detection model on the same clips).
+7. The report's phase 3 chapter and deck slides 13-14.
