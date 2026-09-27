@@ -20,6 +20,9 @@ PDF exports are gitignored and rebuilt on demand.
 | `phase1_kaggle.ipynb` | Same, laid out for Kaggle's runtime and 20 GB `/kaggle/working` limit. |
 | `configs/phase1.yaml` | Benchmark parameters for phase 1: clip length, events per clip, overlap probability, seed. |
 | `scripts/error_analysis_phase3.py` | Phase 3 error analysis on the Mac: compares the predicted val/test timelines with the gold ones, classifies every dropped/spurious event (overlap depth, position in the list, audio energy in the window) and prints the tables in `docs/error_analysis_phase3.md`. CPU, seconds. |
+| `nebius_desed.py` | Real recordings on the VM: the question-trained adapter asked directly and inside the decomposition, the timeline adapter transcribing every DESED public-eval clip (+ trailing check at the ESC-50 threshold), the untrained model on the first 700 questions. Resumable, table at the end with the empty-answer counts. `CTAG_MODEL_ID` + `CTAG_N` for the CPU dry run. |
+| `scripts/nebius_sync.sh` | Mac <-> VM: `push` (transcription adapter + evaluations), `push-desed` (DESED questions, timelines, 692 wav files), `pull` (`~/phase3_results`). |
+| `scripts/desed_review_sample.py` | Stratified 300-question hand-review sample from `review.csv` (40 per type, 20 ABSENT, ≤2 per clip, non-Speech preferred). |
 
 ---
 
@@ -65,6 +68,7 @@ PDF exports are gitignored and rebuilt on demand.
 
 | File | What it does |
 |---|---|
+| `test_desed_runner.py` | 4 tests. The DESED runner's dry-run command list (order, adapters, fixed trailing threshold, the untrained cap, the decomposition skipped with a local model id); the review sampler (stratified, ≤2 per clip, non-Speech preferred, deterministic; the real CSV when present). |
 | `test_grounding.py` | 46 tests. Timeline predicates against hand-checked cases; query generation invariants; parser shapes; metric edge cases (empty vs unparseable, rejection metrics returning `None`); the agent's `combine()` matching `Timeline`; the split leak check; collator masking under placeholder expansion and sequence capping; the new-rows embedding/head wrappers and their save/load round trip; `MEASURED_BETA` pinned; hybrid selection and its refusal cases. |
 
 ---
