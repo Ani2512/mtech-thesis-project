@@ -76,8 +76,18 @@ RESULTS = os.path.expanduser(os.environ.get("CTAG_RESULTS", "~/phase3_results"))
 DRY_RUN = os.environ.get("CTAG_DRY_RUN", "0") == "1"
 
 BENCH = "data/esc50"
-GEN = "data/gen_esc50"
-ADAPTER = "runs/lora_transcribe"
+GEN = os.environ.get("CTAG_GEN_DIR", "data/gen_esc50")
+# A retrain against the habits the DESED run exposed (docs/results_desed.md):
+#   CTAG_GEN_VARIED=1  event length 0.25-8 s and 3-9 events per clip (gen_train --varied)
+#   CTAG_CLASSES=all   all 50 ESC-50 classes instead of the benchmark's 14
+#   CTAG_OPEN_VOCAB=1  no sound-name list in the transcription prompt, training and evaluation
+# Give such a run its own CTAG_GEN_DIR and CTAG_ADAPTER so nothing existing is skipped or overwritten.
+GEN_VARIED = os.environ.get("CTAG_GEN_VARIED", "0") == "1"
+CLASSES = os.environ.get("CTAG_CLASSES", "")
+OPEN_VOCAB = os.environ.get("CTAG_OPEN_VOCAB", "0") == "1"
+gen_extra = (["--varied"] if GEN_VARIED else ["--hard"]) + (["--classes", CLASSES] if CLASSES else [])
+vocab_flag = ["--no-vocab-in-prompt"] if OPEN_VOCAB else []
+ADAPTER = os.environ.get("CTAG_ADAPTER", "runs/lora_transcribe")
 TEST, VAL = f"{BENCH}/benchmark_test.jsonl", f"{BENCH}/benchmark_val.jsonl"
 AMP = "bf16" if PRECISION == "bf16" else "none"
 print(f"[phase3] gen={GEN_N} epochs={EPOCHS} bs={BS} accum={ACCUM} lr={LR} lora_r={LORA_R} precision={PRECISION} "
@@ -131,15 +141,15 @@ ok &= run("split", py + ["ctag.split", "--bench", f"{BENCH}/benchmark.jsonl", "-
 
 # ---------------------------------------------------------------- 2. generated set
 ok &= run(f"generate {GEN_N} hard clips",
-          py + ["ctag.gen_train", "--source", "esc50", "--n-clips", GEN_N, "--hard", "--workers", WORKERS,
+          py + ["ctag.gen_train", "--source", "esc50", "--n-clips", GEN_N] + gen_extra + ["--workers", WORKERS,
                 "--queries", "--out", GEN, "--esc50-root", "data/esc50_raw"], f"{GEN}/gen_stats.json")
 
 # ---------------------------------------------------------------- 3. SFT files
 ok &= run("SFT: transcription targets for the generated set",
-          py + ["ctag.sft_data", "--task", "transcribe", "--timelines", f"{GEN}/timelines.jsonl",
+          py + ["ctag.sft_data", "--task", "transcribe"] + vocab_flag + [ "--timelines", f"{GEN}/timelines.jsonl",
                 "--out", f"{GEN}/sft_transcribe.jsonl"], f"{GEN}/sft_transcribe.jsonl")
 ok &= run("SFT: transcription targets for the benchmark val clips",
-          py + ["ctag.sft_data", "--task", "transcribe", "--timelines", f"{BENCH}/timelines.jsonl",
+          py + ["ctag.sft_data", "--task", "transcribe"] + vocab_flag + [ "--timelines", f"{BENCH}/timelines.jsonl",
                 "--bench", VAL, "--out", f"{BENCH}/sft_transcribe_val.jsonl"], f"{BENCH}/sft_transcribe_val.jsonl")
 if not ok:
     raise SystemExit("data preparation failed; see above")
@@ -164,7 +174,7 @@ if not ok:
 # ---------------------------------------------------------------- 5. evaluate
 for split, tag in ((VAL, "val"), (TEST, "test")):
     run(f"transcribe {tag} clips",
-        py + ["ctag.run_transcribe", "--model", "qwen2.5-omni", "--adapter", ADAPTER, "--precision", PRECISION,
+        py + ["ctag.run_transcribe", "--model", "qwen2.5-omni"] + vocab_flag + [ "--adapter", ADAPTER, "--precision", PRECISION,
               "--bench", split, "--timelines", f"{BENCH}/timelines.jsonl", "--out", f"runs/esc50/transcribe_{tag}"],
         f"runs/esc50/transcribe_{tag}/summary.json")
     run(f"every query type from the {tag} timelines",
@@ -187,7 +197,7 @@ for split, tag in ((VAL, "val"), (TEST, "test")):
 if os.environ.get("CTAG_STOP_PROBS", "1") == "1":
     for split, tag in ((VAL, "val"), (TEST, "test")):
         run(f"transcribe {tag} clips with stop probabilities",
-            py + ["ctag.run_transcribe", "--model", "qwen2.5-omni", "--adapter", ADAPTER, "--precision", PRECISION, "--stop-probs",
+            py + ["ctag.run_transcribe", "--model", "qwen2.5-omni"] + vocab_flag + [ "--adapter", ADAPTER, "--precision", PRECISION, "--stop-probs",
                   "--bench", split, "--timelines", f"{BENCH}/timelines.jsonl", "--out", f"runs/esc50/transcribe_{tag}_stop"],
             f"runs/esc50/transcribe_{tag}_stop/summary.json")
     run("trailing check: threshold from val, applied to test",

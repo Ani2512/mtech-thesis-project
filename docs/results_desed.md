@@ -68,17 +68,33 @@ breaking 492, footsteps 455, clock alarm 436, church bells 356, dog 336, train
 297, car horn 209, sneezing 165, laughing 149, siren 123, door wood knock 92,
 rooster 70; then dishes 31, blender 17, and a handful of fragments. That is the
 fourteen ESC-50 training classes, in a domestic recording that contains none of
-keyboard typing, glass breaking, church bells, trains, sneezing or roosters. The
-prompt names the fourteen classes (the closed-vocabulary variant was used, as in
-training), and the model obeys the list: it never writes "speech", which is in
-913 of the 2,765 gold events. Three separate habits are visible:
+keyboard typing, glass breaking, church bells, trains, sneezing or roosters. It
+never writes "speech", which is 913 of the 2,765 gold events; over real speech it
+writes cat (369 times), keyboard typing (315), glass breaking (136), footsteps (111).
 
-1. **Vocabulary.** Eight of DESED's ten classes were never in training, and the
-   prompt forbids them. Recall on those is exactly zero by construction.
+**Correction, 2026-10-04.** An earlier version of this section said the prompt
+listed the fourteen ESC-50 names and the model obeyed it. That was wrong.
+`run_transcribe` builds the name list from the timelines it is given, so on DESED
+the prompt read "using only these sound names: alarm bell ringing, blender, cat,
+dishes, dog, electric shaver toothbrush, frying, running water, speech, vacuum
+cleaner". The model was told the right ten names and wrote the fourteen it was
+trained on anyway (48 of 5,892 events use a DESED-only name). The vocabulary habit
+is in the weights, not in the prompt, so an open-vocabulary rerun of this adapter
+would not fix it; the question it was meant to answer is answered here.
+
+Three separate habits are visible:
+
+1. **Vocabulary.** Eight of DESED's ten classes were never in training. The
+   prompt offered them and the model ignored the offer: recall on six of them
+   is exactly zero.
 2. **Duration.** Every window is 2.5 s, the ESC-50 trim length, on sounds whose
    true median is 0.85 s. Even where the name is right the overlap often falls
    under 0.5. The label-agnostic F1 of 0.148 against 0.023 label-aware says that
    about six times as many windows land on *a* sound as on the *named* sound.
+   For the two shared classes the placement is there and the size is not: recall
+   of gold dog events is 0.12 at IoU 0.5, 0.25 at 0.3 and 0.84 at 0.1; cat 0.15,
+   0.45 and 0.96. A window of the wrong length sits on almost every real dog and
+   cat.
 3. **Density.** It writes 8.5 events per clip for 10 s of audio, twice the true
    count: the generated training clips carry 6.5 events per 20 s and the model
    reproduces that rate.
@@ -111,19 +127,19 @@ untrained row is on the first 700 questions, not all 4,948.
 
 ## What follows
 
-1. **Separate the three habits.** Re-run the timeline adapter with
-   `--no-vocab-in-prompt` (the open-vocabulary prompt exists) to see whether
-   the vocabulary habit is the prompt or the weights. Score dog and cat alone
-   with a looser overlap threshold to see whether timing survives where the
-   name is known (at IoU 0.5 the 2.5 s windows fail on 0.85 s sounds even when
-   centred).
-2. **TEMPO's second stage: train on real data.** DESED's validation set
+1. ~~Open-vocabulary rerun of this adapter.~~ Not needed: see the correction
+   above; the prompt already carried the right names.
+2. **Retrain without the three habits.** `gen_train --varied --classes all`
+   (2026-10-04) draws event length log-uniformly from 0.25 to 8 s by cropping or
+   looping the source, 3 to 9 events per clip, all 50 ESC-50 classes; with
+   `--duration 10` a 200-clip sample has 3.8 events per clip and a 1.06 s median
+   length (DESED: 4.0 and 0.85 s). Train with the open prompt
+   (`CTAG_GEN_VARIED=1 CTAG_CLASSES=all CTAG_OPEN_VOCAB=1`, own `CTAG_GEN_DIR`
+   and `CTAG_ADAPTER`), then `nebius_desed.py` with `CTAG_OPEN_VOCAB=1`.
+3. **TEMPO's second stage: train on real data.** DESED's validation set
    (1,168 clips, strong labels, via the `desed` package) is the natural training
-   half, with the 692-clip public set as the test. Mixed with the generated
-   clips, open vocabulary, real durations. This is the fix the literature uses.
-3. **Generate with real durations and more classes.** The composer trims every
-   ESC-50 source to 2.5 s; letting durations vary and drawing from all 50 classes
-   removes two of the three habits without any real data.
+   half, with the 692-clip public set as the test. Only two ESC-50 classes are
+   DESED classes, so step 2 alone cannot teach "speech" or "dishes".
 4. **The hand review** still decides which DESED questions are fair; the
    relative ordering above is far too large to be an annotation artefact, but
    per-type numbers on real audio should not be quoted until it is done.

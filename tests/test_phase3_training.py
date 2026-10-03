@@ -219,3 +219,28 @@ def test_runner_can_run_arm_c_at_scale_alone_with_its_decomposition_eval():
             j = [" ".join(json.loads(l[4:])) for l in r.stdout.splitlines() if l.startswith("DRY ")]
             assert any("lora_q_tt" in x for x in j)
             assert any("test_f_text" in x for x in j) == (bad == "both")
+
+
+def test_runner_retrain_knobs_reach_the_generator_and_the_prompts():
+    import json
+    import os
+    env = {**os.environ, "CTAG_DRY_RUN": "1", "CTAG_ARM_E": "0", "CTAG_GEN_VARIED": "1", "CTAG_CLASSES": "all",
+           "CTAG_OPEN_VOCAB": "1", "CTAG_GEN_DIR": "data/gen_varied", "CTAG_ADAPTER": "runs/lora_transcribe_v2"}
+    out = subprocess.run([sys.executable, "nebius_phase3.py"], capture_output=True, text=True, env=env)
+    assert out.returncode == 0, out.stderr[-1500:]
+    cmds = [json.loads(l[4:]) for l in out.stdout.splitlines() if l.startswith("DRY ")]
+    gen = next(c for c in cmds if c[2] == "ctag.gen_train")
+    assert "--varied" in gen and "--hard" not in gen and gen[gen.index("--classes") + 1] == "all"
+    assert gen[gen.index("--out") + 1] == "data/gen_varied"
+    for c in cmds:
+        if c[2] == "ctag.run_transcribe" or (c[2] == "ctag.sft_data" and "transcribe" in c):
+            assert "--no-vocab-in-prompt" in c, c
+    assert any("runs/lora_transcribe_v2" in c for c in cmds)
+    # defaults unchanged
+    env = {**os.environ, "CTAG_DRY_RUN": "1", "CTAG_ARM_E": "0"}
+    for k in ("CTAG_GEN_VARIED", "CTAG_CLASSES", "CTAG_OPEN_VOCAB", "CTAG_GEN_DIR", "CTAG_ADAPTER"):
+        env.pop(k, None)
+    out = subprocess.run([sys.executable, "nebius_phase3.py"], capture_output=True, text=True, env=env)
+    cmds = [json.loads(l[4:]) for l in out.stdout.splitlines() if l.startswith("DRY ")]
+    gen = next(c for c in cmds if c[2] == "ctag.gen_train")
+    assert "--hard" in gen and "--varied" not in gen and not any("--no-vocab-in-prompt" in c for c in cmds)
