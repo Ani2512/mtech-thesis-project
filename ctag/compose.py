@@ -23,12 +23,51 @@ from .timeline import Event, Timeline
 SR = 16000
 
 
+def _loguniform(rng: random.Random, lo: float, hi: float) -> float:
+    import math
+    return math.exp(rng.uniform(math.log(lo), math.log(hi)))
+
+
+def fit_duration(x: np.ndarray, target_s: float, rng: random.Random) -> np.ndarray:
+    """Make a source sound last `target_s`: a random crop if it is longer, a
+    cross-faded loop if it is shorter, 20 ms fades at both ends. Every model
+    trained on the fixed 2.5 s cap wrote 2.5 s windows on real recordings whose
+    events have a 0.85 s median and run to 10 s (docs/results_desed.md); this is
+    what lets the generator vary event length."""
+    n = max(int(0.05 * SR), int(target_s * SR))
+    if len(x) == 0:
+        return x
+    if len(x) >= n:
+        s = rng.randrange(0, len(x) - n + 1)
+        y = x[s: s + n].copy()
+    else:
+        xf = int(min(0.03 * SR, len(x) // 4))
+        parts, total = [x.copy()], len(x)
+        while total < n:
+            nxt = x.copy()
+            if xf:
+                ramp = np.linspace(0, 1, xf, dtype=np.float32)
+                parts[-1][-xf:] = parts[-1][-xf:] * (1 - ramp) + nxt[:xf] * ramp
+                nxt = nxt[xf:]
+            parts.append(nxt)
+            total += len(nxt)
+        y = np.concatenate(parts)[:n]
+    f = int(min(0.02 * SR, len(y) // 2))
+    if f:
+        ramp = np.linspace(0, 1, f, dtype=np.float32)
+        y[:f] *= ramp
+        y[-f:] *= ramp[::-1]
+    return y.astype(np.float32)
+
+
 # ---------------------------------------------------------------- banks
 class ProceduralBank:
     """Five synthetic 'sound classes' with audibly distinct spectra."""
     LABELS = ["beep", "buzz", "hiss", "click", "chirp"]
     # human-readable phrases used in query text
     PHRASES = {"beep": "beep", "buzz": "buzz", "hiss": "hiss", "click": "clicking", "chirp": "chirp"}
+
+    dur_range: tuple[float, float] | None = None   # set to vary event length (gen_train --varied)
 
     def __init__(self, rng: random.Random):
         self.rng = rng
@@ -40,7 +79,7 @@ class ProceduralBank:
         return self.PHRASES[label]
 
     def sample(self, label: str) -> np.ndarray:
-        dur = self.rng.uniform(0.4, 1.6)
+        dur = _loguniform(self.rng, *self.dur_range) if self.dur_range else self.rng.uniform(0.4, 1.6)
         t = np.arange(int(dur * SR)) / SR
         if label == "beep":
             x = np.sin(2 * np.pi * 880 * t)
@@ -70,7 +109,11 @@ class ESC50Bank:
         self.rng = rng
         self.root = Path(root)
         self._ensure()
+        if classes and list(classes) == ["all"]:
+            with open(self.root / "meta" / "esc50.csv", newline="") as f:
+                classes = sorted({row["category"] for row in csv.DictReader(f)})
         self.classes = classes or self.DEFAULT_CLASSES
+        self.dur_range: tuple[float, float] | None = None   # set to vary event length (gen_train --varied)
         self.index: dict[str, list[Path]] = {c: [] for c in self.classes}
         with open(self.root / "meta" / "esc50.csv", newline="") as f:
             for row in csv.DictReader(f):
@@ -135,6 +178,8 @@ class ESC50Bank:
         nz = np.where(np.abs(x) > thr)[0]
         if len(nz):
             x = x[max(0, nz[0] - int(0.02 * SR)): nz[-1] + int(0.02 * SR)]
+        if self.dur_range:
+            return fit_duration(x, _loguniform(self.rng, *self.dur_range), self.rng)
         # cap at 2.5 s so several events fit in a clip
         return x[: int(2.5 * SR)]
 

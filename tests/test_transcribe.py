@@ -200,3 +200,29 @@ def test_gen_train_render_only_regenerates_identical_audio_from_timelines(tmp_pa
             f.write(json.dumps(r) + "\n")
     with pytest.raises(RuntimeError):
         render_only(tmp_path / "g", "procedural")
+
+
+def test_fit_duration_crops_long_sources_and_loops_short_ones():
+    import numpy as np
+    from ctag.compose import SR, fit_duration
+    rng = random.Random(0)
+    x = np.sin(np.arange(SR) / 20).astype("float32")           # 1 s source
+    for target in (0.3, 1.0, 4.0):
+        y = fit_duration(x, target, rng)
+        assert abs(len(y) / SR - target) < 0.01, target
+        assert abs(y[0]) < 1e-3 and abs(y[-1]) < 1e-3            # faded ends
+    assert len(fit_duration(np.zeros(0, dtype="float32"), 1.0, rng)) == 0
+
+
+def test_gen_train_varied_mode_varies_event_length_and_renders_back(tmp_path):
+    from ctag.gen_train import build, render_only
+    s = build("procedural", 30, tmp_path / "v", seed=4, varied=True, write_audio=False)
+    d = s["event_duration"]
+    assert d["min"] < 0.6 and d["max"] > 2.5 and s["varied"] is True, d
+    rows = [json.loads(l) for l in open(tmp_path / "v" / "timelines.jsonl")]
+    assert all(r["varied"] for r in rows) and len({len(r["events"]) for r in rows}) > 2
+    assert all(e["offset"] <= r["duration"] for r in rows for e in r["events"])
+    assert render_only(tmp_path / "v", "procedural", workers=2) == 30      # same timelines regenerate
+    # the earlier recipes are untouched: hard mode still caps procedural events at 1.6 s
+    h = build("procedural", 30, tmp_path / "h", seed=4, hard=True, write_audio=False)
+    assert h["event_duration"]["max"] <= 1.61 and h["varied"] is False

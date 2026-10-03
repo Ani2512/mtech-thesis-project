@@ -53,6 +53,8 @@ T_ADAPTER = os.environ.get("CTAG_T_ADAPTER", "runs/lora_transcribe")
 ZEROSHOT_N = os.environ.get("CTAG_DESED_ZEROSHOT_N", "700")
 TRAIL_THR = os.environ.get("CTAG_DESED_TRAIL_THR", "0.02")
 PRECISION = os.environ.get("CTAG_PRECISION", "bf16")
+# CTAG_OPEN_VOCAB=1: no sound-name list in the transcription prompt (for an adapter trained that way)
+vocab_flag = ["--no-vocab-in-prompt"] if os.environ.get("CTAG_OPEN_VOCAB", "0") == "1" else []
 N = os.environ.get("CTAG_N")
 MODEL_ID = os.environ.get("CTAG_MODEL_ID")
 RESULTS = os.path.expanduser(os.environ.get("CTAG_RESULTS", "~/phase3_results"))
@@ -128,7 +130,7 @@ else:
 
 # 3. the timeline adapter: one transcription per clip, every type from it, trailing check
 run("transcribe DESED public with the timeline adapter (stop probabilities on)",
-    py + ["ctag.run_transcribe", "--model", "qwen2.5-omni", "--adapter", T_ADAPTER, "--precision", PRECISION, "--stop-probs",
+    py + ["ctag.run_transcribe", "--model", "qwen2.5-omni"] + vocab_flag + ["--adapter", T_ADAPTER, "--precision", PRECISION, "--stop-probs",
           "--bench", BENCH, "--timelines", TIMELINES, "--out", f"{OUT}/transcribe_public"] + n_arg + mid,
     f"{OUT}/transcribe_public/summary.json")
 run("every query type from the DESED timelines",

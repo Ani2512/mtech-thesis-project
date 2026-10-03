@@ -40,9 +40,18 @@ def clip_seed(seed: int, i: int) -> int:
     return int.from_bytes(hashlib.sha256(f"{seed}:{i}".encode()).digest()[:8], "big")
 
 
-def draw_recipe(rng: random.Random, hard: bool, duration: float) -> dict:
+VARIED_DUR = (0.25, 8.0)     # seconds, log-uniform; DESED's events run 0.1-10 s, median 0.85 s
+
+
+def draw_recipe(rng: random.Random, hard: bool, duration: float, varied: bool = False) -> dict:
     """The per-clip recipe. Easy = the benchmark's fixed recipe. Hard = wide ranges
     biased towards the failure modes measured in phase 2."""
+    if varied:
+        # real-recording-like: few or many events, any length (the bank varies it),
+        # so the event count and the window length stop being constants to memorise
+        return {"duration": duration, "n_events": rng.randint(3, 9), "n_labels": rng.randint(2, 4),
+                "p_overlap": rng.uniform(0.2, 0.8), "gap": (0.1, 3.0),
+                "min_overlap": rng.uniform(0.1, 0.5), "snr_db": rng.uniform(3.0, 30.0)}
     if not hard:
         return {"duration": duration, "n_events": 6, "n_labels": 3, "p_overlap": 0.45,
                 "min_overlap": 0.3, "snr_db": 20.0, "gap": (0.4, 2.5)}
@@ -75,17 +84,18 @@ def _one(task: tuple) -> dict:
     """Compose one clip deterministically. Runs in a worker process."""
     import soundfile as sf
 
-    i, seed, hard, duration, out, fmt, write_audio, max_per_type, want_queries = task
+    i, seed, hard, duration, out, fmt, write_audio, max_per_type, want_queries, varied = task
     rng = random.Random(clip_seed(seed, i))
     _BANK.rng = rng                       # the bank draws source files from the same stream
-    rec = draw_recipe(rng, hard, duration)
+    _BANK.dur_range = VARIED_DUR if varied else None
+    rec = draw_recipe(rng, hard, duration, varied)
     audio, tl = compose_clip(_BANK, rng, **rec)
     clip_id = f"gen{seed}_{i:06d}"
     ext = "flac" if fmt == "flac" else "wav"
     wav = Path(out) / "audio" / f"{clip_id}.{ext}"
     if write_audio:
         sf.write(wav, audio, SR, subtype="PCM_16")
-    row = {"clip_id": clip_id, "audio": str(wav), "hard": hard, "recipe": {**rec, "gap": list(rec["gap"])}, **tl.to_dict()}
+    row = {"clip_id": clip_id, "audio": str(wav), "hard": hard, "varied": varied, "recipe": {**rec, "gap": list(rec["gap"])}, **tl.to_dict()}
     queries = []
     if want_queries:
         vocab = _BANK.labels()
@@ -117,14 +127,14 @@ def stats(rows: list[dict]) -> dict:
 def build(source: str, n_clips: int, out: Path, seed: int = 0, hard: bool = False, duration: float = 20.0,
           workers: int = 1, fmt: str = "wav", write_audio: bool = True, queries: bool = False,
           max_per_type: int = 2, esc50_root: Path | None = None, classes: list[str] | None = None,
-          start: int = 0) -> dict:
+          start: int = 0, varied: bool = False) -> dict:
     out.mkdir(parents=True, exist_ok=True)
     if write_audio:
         (out / "audio").mkdir(exist_ok=True)
     if source == "esc50":
         esc50_root = esc50_root or out.parent / "esc50"
         _make_bank(source, str(esc50_root), classes)   # download/index once, in the parent, not 8 times
-    tasks = [(i, seed, hard, duration, str(out), fmt, write_audio, max_per_type, queries)
+    tasks = [(i, seed, hard, duration, str(out), fmt, write_audio, max_per_type, queries, varied)
              for i in range(start, start + n_clips)]
     init_args = (source, str(esc50_root) if esc50_root else None, classes)
     results = []
@@ -147,7 +157,10 @@ def build(source: str, n_clips: int, out: Path, seed: int = 0, hard: bool = Fals
                 for d in r["queries"]:
                     fq.write(json.dumps(d, ensure_ascii=False) + "\n")
     s = stats([r["timeline"] for r in results])
-    s.update({"source": source, "seed": seed, "hard": hard, "audio": write_audio, "format": fmt,
+    durs = sorted(e["offset"] - e["onset"] for r in results for e in r["timeline"]["events"])
+    if durs:
+        s["event_duration"] = {"min": round(durs[0], 2), "median": round(durs[len(durs) // 2], 2), "max": round(durs[-1], 2)}
+    s.update({"source": source, "seed": seed, "hard": hard, "varied": varied, "audio": write_audio, "format": fmt,
               "queries": sum(len(r["queries"]) for r in results)})
     (out / "gen_stats.json").write_text(json.dumps(s, indent=2), encoding="utf-8")
     return s
@@ -170,7 +183,8 @@ def render_only(out: Path, source: str, workers: int = 1, fmt: str = "wav",
             raise ValueError(f"not a generated clip id: {r['clip_id']}")
         if r.get("hard") is None:
             raise ValueError(f"{r['clip_id']}: no 'hard' flag stored; regenerate with the current ctag.gen_train")
-        tasks.append((int(m.group(2)), int(m.group(1)), bool(r["hard"]), r["duration"], str(out), fmt, True, 0, False))
+        tasks.append((int(m.group(2)), int(m.group(1)), bool(r["hard"]), r["duration"], str(out), fmt, True, 0, False,
+                      bool(r.get("varied", False))))
     init_args = (source, str(esc50_root) if esc50_root else None, classes)
     if workers > 1:
         with Pool(workers, initializer=_init, initargs=init_args) as pool:
@@ -200,6 +214,9 @@ def main(argv=None):
     ap.add_argument("--seed", type=int, default=1)
     ap.add_argument("--start", type=int, default=0, help="first clip index (to extend a set in chunks)")
     ap.add_argument("--hard", action="store_true", help="wide, failure-mode-biased recipes")
+    ap.add_argument("--varied", action="store_true",
+                    help="real-recording-like recipes: event length 0.25-8 s (crop or loop the source), "
+                         "3-9 events, SNR 3-30 dB; removes the fixed 2.5 s length every earlier set had")
     ap.add_argument("--duration", type=float, default=20.0)
     ap.add_argument("--workers", type=int, default=1)
     ap.add_argument("--format", choices=["wav", "flac"], default="wav")
@@ -207,7 +224,8 @@ def main(argv=None):
     ap.add_argument("--queries", action="store_true", help="also emit per-question benchmark rows")
     ap.add_argument("--max-per-type", type=int, default=2)
     ap.add_argument("--esc50-root", default=None)
-    ap.add_argument("--classes", default=None, help="comma-separated ESC-50 classes (default: the benchmark's 14)")
+    ap.add_argument("--classes", default=None,
+                    help="comma-separated ESC-50 classes, or 'all' for all 50 (default: the benchmark's 14)")
     a = ap.parse_args(argv)
     if a.render_only:
         n = render_only(Path(a.out), a.source, a.workers, a.format,
@@ -217,7 +235,7 @@ def main(argv=None):
         raise SystemExit("--n-clips is required unless --render-only")
     s = build(a.source, a.n_clips, Path(a.out), a.seed, a.hard, a.duration, a.workers, a.format,
               not a.no_audio, a.queries, a.max_per_type, Path(a.esc50_root) if a.esc50_root else None,
-              a.classes.split(",") if a.classes else None, a.start)
+              a.classes.split(",") if a.classes else None, a.start, a.varied)
     print(json.dumps({k: v for k, v in s.items() if k != "label_counts"}, indent=2))
 
 
