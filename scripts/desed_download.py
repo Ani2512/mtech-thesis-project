@@ -50,15 +50,23 @@ def fetch(stem: str, vid: str, start: float, end: float, out: Path, ytdlp: str) 
                "--download-sections", f"*{start:.3f}-{end:.3f}", "--force-keyframes-at-cuts",
                "-x", "--audio-format", "wav", "--audio-quality", "0",
                "-o", f"{tmp}/clip.%(ext)s", f"https://www.youtube.com/watch?v={vid}"]
-        r = subprocess.run(cmd, capture_output=True, text=True, timeout=300)
+        try:
+            r = subprocess.run(cmd, capture_output=True, text=True, timeout=240)
+        except subprocess.TimeoutExpired:
+            # one stalled video must not take the whole run down (it did, at clip 274)
+            return stem, "failed: timeout after 240 s"
         got = list(Path(tmp).glob("clip.wav"))
         if r.returncode != 0 or not got:
             err = (r.stderr.strip().splitlines() or ["no output"])[-1][:160]
             return stem, f"failed: {err}"
         # pad or trim to exactly end-start seconds so the labels line up with the file
         want = end - start
-        subprocess.run(["ffmpeg", "-y", "-loglevel", "error", "-i", str(got[0]), "-t", f"{want:.3f}",
-                        "-af", f"apad=whole_dur={want:.3f}", str(dest)], check=True, timeout=120)
+        try:
+            subprocess.run(["ffmpeg", "-y", "-loglevel", "error", "-i", str(got[0]), "-t", f"{want:.3f}",
+                            "-af", f"apad=whole_dur={want:.3f}", str(dest)], check=True, timeout=120)
+        except (subprocess.CalledProcessError, subprocess.TimeoutExpired) as e:
+            dest.unlink(missing_ok=True)
+            return stem, f"failed: ffmpeg {type(e).__name__}"
     return stem, "ok"
 
 
@@ -79,6 +87,7 @@ def main(argv=None):
         todo = todo[: a.limit]
     print(f"{len(todo)} clips -> {out}", flush=True)
     counts, missing, t0 = {"ok": 0, "exists": 0, "failed": 0}, [], time.time()
+    (out / "missing.tsv").write_text("filename\treason\n", encoding="utf-8")
     with ThreadPoolExecutor(a.workers) as pool:
         futs = [pool.submit(fetch, *c, out, a.ytdlp) for c in todo]
         for k, fut in enumerate(as_completed(futs), 1):
@@ -87,13 +96,11 @@ def main(argv=None):
             counts[key] = counts.get(key, 0) + 1
             if key == "failed":
                 missing.append((stem, status[8:]))
+                with open(out / "missing.tsv", "a", encoding="utf-8") as f:
+                    f.write(f"{stem}.wav\t{status[8:]}\n")
             if k % 25 == 0 or k == len(todo):
                 print(f"{k}/{len(todo)}  ok {counts['ok']}  exists {counts['exists']}  failed {counts['failed']}  "
                       f"{(time.time() - t0) / 60:.0f} min", flush=True)
-    with open(out / "missing.tsv", "w", encoding="utf-8") as f:
-        f.write("filename\treason\n")
-        for stem, why in sorted(missing):
-            f.write(f"{stem}.wav\t{why}\n")
     print(f"done: {counts}; {len(missing)} missing listed in {out / 'missing.tsv'}")
     return 0 if counts["ok"] + counts["exists"] else 1
 
