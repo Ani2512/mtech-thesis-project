@@ -41,15 +41,18 @@ def clips(tsv: Path) -> list[tuple[str, str, float, float]]:
     return sorted(seen.values())
 
 
-def fetch(stem: str, vid: str, start: float, end: float, out: Path, ytdlp: str) -> tuple[str, str]:
+def fetch(stem: str, vid: str, start: float, end: float, out: Path, ytdlp: str,
+          cookies_from_browser: str | None = None) -> tuple[str, str]:
     dest = out / f"{stem}.wav"
     if dest.exists() and dest.stat().st_size > 1000:
         return stem, "exists"
     with tempfile.TemporaryDirectory() as tmp:
         cmd = [ytdlp, "--quiet", "--no-warnings", "--no-playlist", "-f", "bestaudio/best",
+               "--sleep-requests", "1", "--retries", "3", "--extractor-retries", "3",
                "--download-sections", f"*{start:.3f}-{end:.3f}", "--force-keyframes-at-cuts",
                "-x", "--audio-format", "wav", "--audio-quality", "0",
-               "-o", f"{tmp}/clip.%(ext)s", f"https://www.youtube.com/watch?v={vid}"]
+               "-o", f"{tmp}/clip.%(ext)s"] + (["--cookies-from-browser", cookies_from_browser] if cookies_from_browser else []) \
+              + [f"https://www.youtube.com/watch?v={vid}"]
         try:
             r = subprocess.run(cmd, capture_output=True, text=True, timeout=240)
         except subprocess.TimeoutExpired:
@@ -77,19 +80,28 @@ def main(argv=None):
     ap.add_argument("--workers", type=int, default=4)
     ap.add_argument("--limit", type=int, default=None, help="first N clips (a smoke test)")
     ap.add_argument("--ytdlp", default=shutil.which("yt-dlp") or "yt-dlp")
+    ap.add_argument("--cookies-from-browser", default=None,
+                    help="e.g. chrome: use the browser's YouTube login when YouTube demands a sign-in (your account)")
+    ap.add_argument("--retry-missing", action="store_true",
+                    help="only the clips listed in <out>/missing.tsv whose reason was a sign-in or bot check")
     a = ap.parse_args(argv)
     if not shutil.which("ffmpeg"):
         raise SystemExit("ffmpeg is not on PATH (brew install ffmpeg)")
     out = Path(a.out)
     out.mkdir(parents=True, exist_ok=True)
     todo = clips(Path(a.tsv))
+    if a.retry_missing:
+        miss = out / "missing.tsv"
+        want = {l.split("\t")[0][:-4] for l in miss.read_text(encoding="utf-8").splitlines()[1:]
+                if "sign in" in l.lower() or "not a bot" in l.lower() or "timeout" in l.lower()} if miss.exists() else set()
+        todo = [c for c in todo if c[0] in want]
     if a.limit:
         todo = todo[: a.limit]
     print(f"{len(todo)} clips -> {out}", flush=True)
     counts, missing, t0 = {"ok": 0, "exists": 0, "failed": 0}, [], time.time()
     (out / "missing.tsv").write_text("filename\treason\n", encoding="utf-8")
     with ThreadPoolExecutor(a.workers) as pool:
-        futs = [pool.submit(fetch, *c, out, a.ytdlp) for c in todo]
+        futs = [pool.submit(fetch, *c, out, a.ytdlp, a.cookies_from_browser) for c in todo]
         for k, fut in enumerate(as_completed(futs), 1):
             stem, status = fut.result()
             key = status.split(":")[0]
