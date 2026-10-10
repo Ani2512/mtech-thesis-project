@@ -143,3 +143,58 @@ untrained row is on the first 700 questions, not all 4,948.
 4. **The hand review** still decides which DESED questions are fair; the
    relative ordering above is far too large to be an annotation artefact, but
    per-type numbers on real audio should not be quoted until it is done.
+
+## Pilot retrain v2 (2026-10-04): varied length, 50 classes, open prompt
+
+Same VM, `main` at 400f1c3. 5,000 generated clips (`gen_train --varied --classes all`:
+2,500 of 10 s, 2,500 of 20 s; event length 0.25-8 s, median 1.04 s), open-vocabulary
+prompt, 3 epochs, 1,875 steps at 3.82 s (1 h 59 min), rank 128, bf16, audio encoder
+trained; eval loss 0.280 / 0.259 / 0.282 by epoch on the 52 composed val clips.
+Output in `runs_nebius_phase3/pilot_v2/` (gitignored). The run was started from a
+script on the VM, not from `nebius_phase3.py`.
+
+| | old adapter (20k clips, 14 classes, 2.5 s cap) | pilot v2 (5k clips, 50 classes, varied) | gold |
+|---|---|---|---|
+| **composed test**: event F1 (pooled) | 0.989 | 0.824 | |
+| composed test: every query type, ALL f1@0.5 | 0.983 | 0.718 | |
+| **DESED**: event F1, label-aware | 0.023 | 0.039 | |
+| DESED: event F1, label-agnostic | 0.148 | **0.282** | |
+| DESED: predicted event length, median | 2.50 s | **1.12 s** | 0.85 s |
+| DESED: events written per clip | 8.5 | **5.6** | 4.0 |
+| DESED: unreadable answers | 0% | 15.2% | |
+| DESED: every query type, ALL f1@0.5 | 0.020 | 0.028 | |
+| DESED recall: vacuum cleaner / cat / dog | 0.00 / 0.15 / 0.12 | 0.51 / 0.18 / 0.08 | |
+
+What it shows:
+
+- **The duration and density habits were artefacts of the generator and are gone.**
+  Windows are now 1.12 s at the median against a true 0.85 s (was a constant 2.50 s),
+  and 5.6 events per clip against a true 4.0 (was 8.5). The label-agnostic event
+  score nearly doubled, 0.148 to 0.282: twice as many windows now sit on a real
+  sound with the right extent.
+- **The vocabulary is as wide as the training set and no wider.** The model now
+  writes 50 names. The one DESED class that gained an ESC-50 name, vacuum
+  cleaner, went from 0.00 to 0.51 recall with no real training data. Over the
+  other real sounds it writes the nearest ESC-50 names: pouring water (215),
+  brushing teeth (204), door wood creaks (203), drinking sipping (197). It still
+  never writes "speech", "dishes", "frying" or "blender", which is why the
+  label-aware and query-level scores stay near zero.
+- **It costs composed accuracy**, 0.983 to 0.718 on the ESC-50 test split. Four
+  times fewer clips, 50 classes instead of 14, and variable lengths: the pilot is
+  not a like-for-like comparison, and the eval loss stopped improving after the
+  second epoch, so this is data-limited, not a ceiling.
+- **A new failure: 105 of 692 real clips produce an answer that runs to the
+  512-token cap** and cannot be read (median 1,097 characters, cut mid-event).
+  On dense real audio the model keeps listing events. The stop-probability
+  check of PR #17 is the tool for this; it was not run here.
+
+Reading: synthetic variation fixes what synthetic regularity broke, and it
+cannot supply classes the source bank does not contain. The remaining gap is
+DESED's own vocabulary, which only real strongly-labelled data (DESED
+validation, TEMPO's stage 2) or a source bank with those classes can close.
+
+Operational note: this VM was preempted three minutes after the first launch,
+came back by itself and sat idle for 3 h 40 min; the run was then installed as
+a boot-time systemd service. After the pilot finished the VM again sat idle
+for about 3.5 h until checked. A run on a preemptible VM should install the
+service before launching and end with a stop.
