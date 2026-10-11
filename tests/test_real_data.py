@@ -127,3 +127,21 @@ def test_verified_real_benchmark_scores_through_the_oracle_grounder(tmp_path):
     subprocess.run(cmd, check=True, capture_output=True)
     summ = json.load(open(tmp_path / "agent" / "summary.json"))
     assert summ["by_type"]["ALL"]["f1@0.5"] == 1.0
+
+
+def test_desed_downloader_parses_clip_names_and_skips_existing(tmp_path):
+    import sys
+    sys.path.insert(0, "scripts")
+    import desed_download as dd
+    tsv = tmp_path / "v.tsv"
+    tsv.write_text("filename\tonset\toffset\tevent_label\nY--4gqARaEJE_0.000_10.000.wav\t0\t1\tDog\n"
+                   "Y--4gqARaEJE_0.000_10.000.wav\t2\t3\tCat\nYabcdefghijk_370.500_380.500.wav\t0\t1\tDog\n")
+    c = dd.clips(tsv)
+    assert c == [("Y--4gqARaEJE_0.000_10.000", "--4gqARaEJE", 0.0, 10.0),
+                 ("Yabcdefghijk_370.500_380.500", "abcdefghijk", 370.5, 380.5)]
+    out = tmp_path / "o"; out.mkdir()
+    (out / "Y--4gqARaEJE_0.000_10.000.wav").write_bytes(b"\0" * 2000)
+    assert dd.fetch(*c[0], out, "yt-dlp-that-does-not-exist")[1] == "exists"     # no network touched
+    bad = tmp_path / "bad.tsv"; bad.write_text("filename\tonset\toffset\tevent_label\nnot_a_desed_name.wav\t0\t1\tDog\n")
+    with pytest.raises(ValueError):
+        dd.clips(bad)
