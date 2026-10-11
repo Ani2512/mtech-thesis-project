@@ -93,7 +93,7 @@ def main(argv=None):
     if a.retry_missing:
         miss = out / "missing.tsv"
         want = {l.split("\t")[0][:-4] for l in miss.read_text(encoding="utf-8").splitlines()[1:]
-                if "sign in" in l.lower() or "not a bot" in l.lower() or "timeout" in l.lower()} if miss.exists() else set()
+                if any(k in l.lower() for k in ("sign in", "not a bot", "timeout", "ffmpeg"))} if miss.exists() else set()
         todo = [c for c in todo if c[0] in want]
     if a.limit:
         todo = todo[: a.limit]
