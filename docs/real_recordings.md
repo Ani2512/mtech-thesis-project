@@ -161,3 +161,26 @@ freely, the interest is in the other nine classes.
   `--min-overlap` and the review exist for.
 - Ten classes, none in ESC-50's fourteen except Dog and Cat, so the model's
   sound vocabulary is tested as well as its timing.
+
+## The training half: DESED validation (2026-10-11)
+
+The 1,168 validation clips ship as labels only; the audio is a 10 s section of a
+YouTube video each. `scripts/desed_download.py` fetches them (yt-dlp + ffmpeg,
+idempotent, `missing.tsv` for what is gone); 911 came down, 257 videos are private
+or removed. Slimmed to 16 kHz mono for the upload and imported:
+
+```bash
+python scripts/desed_download.py --tsv data/desed/metadata/validation.tsv --out data/desed/audio/validation --workers 4
+python scripts/desed_download.py ... --workers 1 --retry-missing      # the transient failures, once more
+mkdir -p data/desed/audio/validation16k && for f in data/desed/audio/validation/*.wav; do
+  ffmpeg -y -loglevel error -i "$f" -ac 1 -ar 16000 -sample_fmt s16 "data/desed/audio/validation16k/$(basename "$f")"; done
+python -m ctag.real_data import --format desed --tsv data/desed/metadata/validation.tsv \
+       --audio-root data/desed/audio/validation16k --require-audio --source desed_validation --out data/desed/validation
+python -m ctag.real_data queries --timelines data/desed/validation/timelines.jsonl --out data/desed/validation --min-overlap 0.3
+```
+
+911 clips, 3,345 events (Speech 1,343, Dishes 475, Dog 469, Alarm 321, Cat 290,
+Running water 162, Frying 85, Blender 79, Vacuum cleaner 72, Shaver 49), 6,368
+questions. No video is shared with the 692 public clips, which stay the test set.
+
+`nebius_real.py` trains on it (docs/nebius.md, "The real-data stage").

@@ -192,3 +192,35 @@ skips it. Why P(stop) and not geometry or energy: docs/error_analysis_phase3.md.
 
 - The real-recording set (`ctag.real_data`): evaluate the same adapter on it
   with `run_transcribe --timelines data/desed/timelines.jsonl` once verified.
+
+## The real-data stage (`nebius_real.py`)
+
+TEMPO's second stage: the timeline adapter trained on real DESED recordings
+(the 911-clip validation set, docs/real_recordings.md) mixed with varied
+generated clips, tested on the 692 public clips and on the composed test split.
+
+```bash
+# Mac
+scripts/nebius_sync.sh push-desed <ip>     # the public test set, if the VM does not have it
+scripts/nebius_sync.sh push-real <ip>      # the validation set, 280 MB
+# VM: the boot service relaunches the runner after a preemption (scripts/nebius_service.sh)
+cd ~/mtech-thesis-project && git pull && source .venv/bin/activate && export HF_HOME=$PWD/hf_cache
+CTAG_SMOKE=1 python nebius_real.py                      # data files + 20 training steps
+scripts/nebius_service.sh install nebius_real.py        # starts the run now and again at every boot
+scripts/nebius_service.sh status                        # later: progress; disable it when done, then stop the VM
+```
+
+Steps, each skipped when its output exists: split the real clips 90/10 by clip
+(the public set is the test, so nothing is held back as "test" here) -> SFT
+files with the open prompt -> a 5,000-clip varied generated set if `CTAG_GEN_DIR`
+has none -> the mix, real x `CTAG_REAL_REPEAT` (4) + generated x 1, ~8,300
+examples -> 20-step smoke -> 3 epochs, rank 128, bf16, encoder trained,
+checkpoint every 100 steps -> transcribe the held-out real clips, the public set
+and the composed test, every query type from each, P(stop) threshold picked on
+the held-out real clips and applied to the public set. About 5 h on an L40S,
+~$5 preemptible. `CTAG_SYNTH=0` trains on the real clips alone. Results land in
+`~/phase3_results/real` and `~/phase3_results/lora_real`; `nebius_sync.sh pull`.
+
+What to read in the final table: the DESED label-aware event F1 (0.023 / 0.039
+before) and the per-sound recall for speech, dishes, frying and blender, which no
+generated clip could teach; the composed-test row says what the stage cost there.
