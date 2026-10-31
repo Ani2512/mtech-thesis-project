@@ -7,6 +7,8 @@
 #   scripts/nebius_sync.sh pull <ip>   # VM -> Mac: everything in ~/phase3_results
 #   scripts/nebius_sync.sh push-desed <ip>  # Mac -> VM: the DESED public-eval questions,
 #                                      # timelines and 692 wav files (1.1 GB) for nebius_desed.py
+#   scripts/nebius_sync.sh push-real <ip>   # Mac -> VM: the DESED validation set for nebius_real.py:
+#                                      # timelines, questions and 911 wav files at 16 kHz mono (280 MB)
 #
 # Local side: runs_nebius_phase3/ in the repo (gitignored). Checkpoints and optimiser
 # state are never copied.
@@ -38,10 +40,21 @@ case "$mode" in
       "ubuntu@$ip:mtech-thesis-project/data/desed/audio/dataset/audio/eval/"
     $SSH "ubuntu@$ip" 'ls ~/mtech-thesis-project/data/desed/audio/dataset/audio/eval/public | wc -l; wc -l ~/mtech-thesis-project/data/desed/public/*.jsonl'
     ;;
+  push-real)
+    for f in data/desed/validation/benchmark.jsonl data/desed/validation/timelines.jsonl data/desed/audio/validation16k; do
+      [ -e "$f" ] || { echo "missing $f (docs/real_recordings.md: download, import with --audio-root data/desed/audio/validation16k, queries)" >&2; exit 1; }
+    done
+    $SSH "ubuntu@$ip" 'mkdir -p ~/mtech-thesis-project/data/desed/validation ~/mtech-thesis-project/data/desed/audio'
+    rsync -az -e "$SSH" data/desed/validation/benchmark.jsonl data/desed/validation/timelines.jsonl \
+      "ubuntu@$ip:mtech-thesis-project/data/desed/validation/"
+    rsync -az --partial -e "$SSH" data/desed/audio/validation16k \
+      "ubuntu@$ip:mtech-thesis-project/data/desed/audio/"
+    $SSH "ubuntu@$ip" 'ls ~/mtech-thesis-project/data/desed/audio/validation16k | wc -l; wc -l ~/mtech-thesis-project/data/desed/validation/*.jsonl'
+    ;;
   pull)
     mkdir -p runs_nebius_phase3
     rsync -az "${EXCL[@]}" -e "$SSH" "ubuntu@$ip:phase3_results/" runs_nebius_phase3/
     du -sh runs_nebius_phase3; ls runs_nebius_phase3/esc50
     ;;
-  *) echo "usage: $0 push|pull|push-desed <ip>" >&2; exit 2;;
+  *) echo "usage: $0 push|pull|push-desed|push-real <ip>" >&2; exit 2;;
 esac
