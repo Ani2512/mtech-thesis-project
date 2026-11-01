@@ -135,3 +135,29 @@ the open prompt, not the real data. Lowest composed recall: door wood knock
    to recover composed accuracy without losing the real-audio gain.
 3. The hand review of `data/desed/public/review_sample.csv`, which decides
    which per-type numbers on real audio can be quoted.
+
+## One-epoch rerun (2026-11-01, evening): the overfitting read was wrong
+
+Same data, same settings, one epoch instead of three (1,017 steps, 60 min, loss
+4.57 → 1.82), own adapter `runs_nebius_phase3/lora_real_1ep`, outputs in
+`runs_nebius_phase3/real_1ep`. The held-out eval loss was indeed lower
+(0.767 vs 0.880), but every score that matters was lower too:
+
+| | 3 epochs (reported above) | 1 epoch |
+|---|---|---|
+| DESED public: label-aware event F1 | **0.671** | 0.644 |
+| DESED public: any-label F1 | **0.791** | 0.766 |
+| DESED public: precision / recall | **0.715** / 0.632 | 0.653 / **0.636** |
+| DESED public: every type ALL | **0.582** | 0.568 |
+| held-out real: event F1 / ALL | **0.713 / 0.655** | 0.684 / 0.639 |
+| composed ESC-50 test: event F1 / ALL | **0.873 / 0.772** | 0.793 / 0.656 |
+
+The one-epoch adapter finds about as many real events (recall 0.636 vs 0.632)
+but names and bounds them worse (precision 0.653 vs 0.715), and it is far
+behind on composed audio, where the third pass still had much to learn. The
+token-level eval loss on 115 clips tracked overconfidence, not accuracy, and
+is not a selection criterion here. **The three-epoch adapter stands as the
+reported result.** The trailing check again did nothing (0.644 → 0.644).
+
+Follow-up 1 of the list above is closed; follow-ups 2 (real stage on the 20k
+generated set) and 3 (the hand review) remain.
