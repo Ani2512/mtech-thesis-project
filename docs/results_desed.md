@@ -198,3 +198,9 @@ came back by itself and sat idle for 3 h 40 min; the run was then installed as
 a boot-time systemd service. After the pilot finished the VM again sat idle
 for about 3.5 h until checked. A run on a preemptible VM should install the
 service before launching and end with a stop.
+
+## Postscript (2026-11-01)
+
+The real-data stage, trained on the DESED validation clips, reaches 0.671
+label-aware event F1 and 0.582 across every question type on this public set.
+See docs/results_real_stage.md.
