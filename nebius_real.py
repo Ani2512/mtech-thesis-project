@@ -102,7 +102,7 @@ def persist():
     if DRY_RUN:
         return
     os.makedirs(RESULTS, exist_ok=True)
-    for src, name in ((OUT, "real"), (ADAPTER, os.path.basename(ADAPTER)), ("logs", "logs")):
+    for src, name in ((OUT, os.path.basename(OUT)), (ADAPTER, os.path.basename(ADAPTER)), ("logs", "logs")):
         if os.path.isdir(src):
             dst = os.path.join(RESULTS, name)
             shutil.rmtree(dst, ignore_errors=True)

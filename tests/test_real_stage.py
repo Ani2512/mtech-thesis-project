@@ -93,3 +93,10 @@ def test_real_runner_real_only_mode_has_no_generator_step():
     for knob in ("CTAG_REAL_DIR", "CTAG_REAL_REPEAT", "CTAG_SYNTH", "CTAG_GEN_DIR", "CTAG_ADAPTER", "CTAG_SMOKE",
                  "CTAG_SAVE_STEPS", "CTAG_DRY_RUN"):
         assert knob in src
+
+
+def test_real_runner_persists_results_under_the_output_folders_own_name():
+    """A second run with its own CTAG_REAL_OUT (runs/real_1ep) must not overwrite
+    the first run's results in ~/phase3_results/real, which it did on 2026-11-01."""
+    src = open("nebius_real.py").read()
+    assert '(OUT, "real")' not in src and "(OUT, os.path.basename(OUT))" in src
