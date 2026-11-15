@@ -60,6 +60,9 @@ python -m ctag.real_data import --format desed --tsv data/desed/metadata/public.
 python -m ctag.real_data queries --timelines data/desed/public/timelines.jsonl --out data/desed/public --min-overlap 0.3
 # one CSV row per question for hand verification
 python -m ctag.real_data export-review --bench data/desed/public/benchmark.jsonl --out data/desed/public/review.csv
+# the hand review itself: a local page that plays each clip, draws the answer windows
+# and writes y/n, corrections and notes straight into the CSV (scripts/review_server.py)
+python scripts/review_server.py --csv data/desed/public/review_sample.csv   # opens http://127.0.0.1:8765
 # after review: keep ok=y, apply corrected_answer, drop ok=n; blank rows never pass
 python -m ctag.real_data apply-review --bench data/desed/public/benchmark.jsonl \
        --review data/desed/public/review.csv --out data/desed/public/benchmark_verified.jsonl
