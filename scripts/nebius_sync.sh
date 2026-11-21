@@ -9,6 +9,8 @@
 #                                      # timelines and 692 wav files (1.1 GB) for nebius_desed.py
 #   scripts/nebius_sync.sh push-real <ip>   # Mac -> VM: the DESED validation set for nebius_real.py:
 #                                      # timelines, questions and 911 wav files at 16 kHz mono (280 MB)
+#   scripts/nebius_sync.sh push-synth <ip>  # Mac -> VM: the DCASE 2020 synthetic evaluation set (exact labels):
+#                                      # timelines, questions and 828 wav files at 16 kHz mono (256 MB)
 #
 # Local side: runs_nebius_phase3/ in the repo (gitignored). Checkpoints and optimiser
 # state are never copied.
@@ -51,10 +53,21 @@ case "$mode" in
       "ubuntu@$ip:mtech-thesis-project/data/desed/audio/"
     $SSH "ubuntu@$ip" 'ls ~/mtech-thesis-project/data/desed/audio/validation16k | wc -l; wc -l ~/mtech-thesis-project/data/desed/validation/*.jsonl'
     ;;
+  push-synth)
+    for f in data/desed/synth20_eval/benchmark.jsonl data/desed/synth20_eval/timelines.jsonl data/desed/audio/synth20_eval16k; do
+      [ -e "$f" ] || { echo "missing $f (docs/real_recordings.md: desed_synth.py labels + render, import, queries)" >&2; exit 1; }
+    done
+    $SSH "ubuntu@$ip" 'mkdir -p ~/mtech-thesis-project/data/desed/synth20_eval ~/mtech-thesis-project/data/desed/audio'
+    rsync -az -e "$SSH" data/desed/synth20_eval/benchmark.jsonl data/desed/synth20_eval/timelines.jsonl \
+      "ubuntu@$ip:mtech-thesis-project/data/desed/synth20_eval/"
+    rsync -az --partial -e "$SSH" data/desed/audio/synth20_eval16k \
+      "ubuntu@$ip:mtech-thesis-project/data/desed/audio/"
+    $SSH "ubuntu@$ip" 'ls ~/mtech-thesis-project/data/desed/audio/synth20_eval16k | wc -l; wc -l ~/mtech-thesis-project/data/desed/synth20_eval/*.jsonl'
+    ;;
   pull)
     mkdir -p runs_nebius_phase3
     rsync -az "${EXCL[@]}" -e "$SSH" "ubuntu@$ip:phase3_results/" runs_nebius_phase3/
     du -sh runs_nebius_phase3; ls runs_nebius_phase3/esc50
     ;;
-  *) echo "usage: $0 push|pull|push-desed|push-real <ip>" >&2; exit 2;;
+  *) echo "usage: $0 push|pull|push-desed|push-real|push-synth <ip>" >&2; exit 2;;
 esac

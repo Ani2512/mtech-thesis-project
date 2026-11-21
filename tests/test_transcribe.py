@@ -226,3 +226,40 @@ def test_gen_train_varied_mode_varies_event_length_and_renders_back(tmp_path):
     # the earlier recipes are untouched: hard mode still caps procedural events at 1.6 s
     h = build("procedural", 30, tmp_path / "h", seed=4, hard=True, write_audio=False)
     assert h["event_duration"]["max"] <= 1.61 and h["varied"] is False
+
+
+def test_run_transcribe_resumes_from_an_interrupted_prediction_file(tmp_path):
+    """A preempted VM relaunches the step: clips already written must be kept,
+    not redone, and a half-written last line or a foreign clip must be ignored."""
+    import json
+    import subprocess
+    import sys
+    from ctag.gen_train import build
+    out = tmp_path / "data"
+    build("procedural", 6, out, seed=3, write_audio=False, queries=True)
+    run_dir = tmp_path / "run"
+    cmd = [sys.executable, "-m", "ctag.run_transcribe", "--model", "mock:oracle", "--drop", "0.5", "--seed", "1",
+           "--bench", str(out / "benchmark.jsonl"), "--timelines", str(out / "timelines.jsonl"), "--out", str(run_dir)]
+    subprocess.run(cmd, check=True, capture_output=True)
+    pred = run_dir / "pred_timelines.jsonl"
+    full = [json.loads(l) for l in open(pred)]
+    assert len(full) == 6
+    # simulate the interruption: 4 finished rows, one foreign clip, one torn line
+    kept = full[:4]
+    foreign = dict(full[4], clip_id="not_in_this_benchmark")
+    pred.write_text("".join(json.dumps(r) + "\n" for r in kept + [foreign]) + '{"clip_id": "half', encoding="utf-8")
+    res = subprocess.run(cmd + ["--seed", "9"], check=True, capture_output=True, text=True)   # different noise
+    assert "resuming: 4 of 6 clips" in res.stdout
+    after = {r["clip_id"]: r for r in (json.loads(l) for l in open(pred))}
+    assert len(after) == 6 and "not_in_this_benchmark" not in after
+    for r in kept:                       # the finished rows came back untouched
+        assert after[r["clip_id"]]["events"] == r["events"]
+    assert json.load(open(run_dir / "summary.json"))["n_clips"] == 6
+    # --no-resume redoes everything (deterministic mock, so a full seed-9 run matches)
+    subprocess.run(cmd + ["--seed", "9", "--no-resume"], check=True, capture_output=True)
+    fresh = {r["clip_id"]: r for r in (json.loads(l) for l in open(pred))}
+    assert len(fresh) == 6
+    # a row without stop probabilities does not count when they are requested
+    res = subprocess.run(cmd + ["--stop-probs"], check=True, capture_output=True, text=True)
+    assert "resuming" not in res.stdout
+    assert all("stop_probs" in json.loads(l) for l in open(pred))
