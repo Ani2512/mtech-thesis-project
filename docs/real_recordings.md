@@ -187,3 +187,33 @@ Running water 162, Frying 85, Blender 79, Vacuum cleaner 72, Shaver 49), 6,368
 questions. No video is shared with the 692 public clips, which stay the test set.
 
 `nebius_real.py` trains on it (docs/nebius.md, "The real-data stage").
+
+## The exact-label test: DCASE 2020 synthetic evaluation soundscapes (2026-11-15)
+
+The hand review can confirm that a sound is there; it cannot resolve the few
+hundred milliseconds by which two annotators disagree, and no real-recording
+set is free of that. DESED's synthetic evaluation set is: DCASE 2020 task 4
+shipped it as Scaper recipes (Zenodo 6026841, `DESED_synth_dcase20_eval_jams`),
+each saying which isolated real recording from the DESED soundbank plays when,
+at what level and pitch shift. The recipe is the ground truth, so the labels are
+exact by construction, while the sounds are real speech, dishes, frying ... in
+the same ten classes as the public set. Scoring the real-data adapter on it
+separates real-recording difficulty from annotation noise in the public-set
+numbers.
+
+```bash
+python scripts/desed_synth.py labels --jams data/desed/synth/jams_eval --out data/desed/metadata/synth20_eval.tsv
+python scripts/desed_synth.py render --jams data/desed/synth/jams_eval --soundbank data/desed/synth/soundbank \
+       --out data/desed/audio/synth20_eval            # scaper + sox (brew install sox; pip install --no-deps scaper jams sox pyloudnorm)
+python -m ctag.real_data import --format desed --tsv data/desed/metadata/synth20_eval.tsv \
+       --audio-root data/desed/audio/synth20_eval --require-audio --source desed_synth20_eval --out data/desed/synth20_eval
+python -m ctag.real_data queries --timelines data/desed/synth20_eval/timelines.jsonl --out data/desed/synth20_eval --min-overlap 0.3
+```
+
+`labels` applies DESED's own post-processing (merge same-label events closer
+than 150 ms, drop events under 250 ms, strip the `_nOn`/`_nOff` source suffixes).
+Counts: 828 soundscapes, 1,957 events (Speech 757, Dishes 202, Cat 181, Alarm
+169, Dog 157, Shaver 119, Vacuum 122, Blender 93, Water 85, Frying 72), median
+event 0.97 s, 2.37 events per clip, 22 empty clips; 6,098 questions (PLAIN 1,235,
+NOT_FOLLOWED 858, ABSENT 806, WHILE 752, ORDINAL 692, AFTER / BEFORE / NEXT_AFTER
+585 each; 106 WHILE dropped at the 0.3 s overlap filter).
