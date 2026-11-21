@@ -161,3 +161,71 @@ reported result.** The trailing check again did nothing (0.644 → 0.644).
 
 Follow-up 1 of the list above is closed; follow-ups 2 (real stage on the 20k
 generated set) and 3 (the hand review) remain.
+
+## The exact-label test (2026-11-21): DCASE 2020 synthetic evaluation soundscapes
+
+The same adapter (`runs_nebius_phase3/lora_real`, 3 epochs), untouched, scored on
+the 828 synthetic evaluation soundscapes of DCASE 2020 task 4
+(docs/real_recordings.md, "The exact-label test"). The sounds are real isolated
+recordings of the same ten DESED classes, placed by Scaper recipes, so every
+onset and offset is exact by construction; there is no annotator to disagree
+with. The hand review of public-set clips planned on 2026-11-15 was dropped for
+this: a reviewer cannot resolve a few hundred milliseconds either. Runner
+`nebius_desed.py` with `CTAG_DESED_ARMS=0` (docs/nebius.md); one preemption,
+resumed by the boot service, the 761 finished clips kept by the new resume in
+`ctag.run_transcribe` (this PR's branch). Output in
+`runs_nebius_phase3/synth20_real/` (folder names say "public"; the set is the
+synthetic one).
+
+### Events: 806 clips with events, 1,957 gold events (2.36 per clip, median 0.97 s)
+
+| test set | event F1 | any-label F1 | recall | precision | median length ratio | median centre error | events / clip | under-report | unreadable |
+|---|---|---|---|---|---|---|---|---|---|
+| DESED public, human labels (692 clips) | 0.671 | 0.791 | 0.632 | 0.715 | 1.006 | 0.046 s | 3.53 (gold 4.0) | 0.308 | 0.3 % |
+| **synthetic eval, exact labels (806 clips)** | **0.701** | **0.848** | **0.700** | **0.702** | **0.993** | **0.026 s** | **2.42 (gold 2.36)** | **0.195** | **0.0 %** |
+
+Recall by sound, synthetic / public: speech 0.85 / 0.80, cat 0.83 / 0.78, alarm
+0.78 / 0.42, running water 0.75 / 0.63, shaver 0.74 / 0.56, dog 0.64 / 0.50,
+vacuum 0.52 / 0.76, dishes 0.42 / 0.41, frying 0.28 / 0.70, blender 0.20 / 0.74.
+Of the 1,950 predicted events, 1,888 carry one of the ten DESED names and 62 an
+ESC-50 name (crackling fire 13, mouse click 8, crickets 7, pouring water 7, ...),
+26 distinct names in all.
+
+### Every query type from the timelines, f1@0.5
+
+| timeline, real-data stage on | PLAIN | ORDINAL | AFTER | BEFORE | NEXT_AFTER | WHILE | NOT_FOLLOWED | **ALL** | ABSENT rejection |
+|---|---|---|---|---|---|---|---|---|---|
+| DESED public (4,948 q) | 0.687 | 0.551 | 0.433 | 0.473 | 0.404 | 0.502 | 0.577 | 0.582 | 0.993 |
+| **synthetic eval (6,098 q)** | 0.662 | **0.700** | 0.451 | 0.398 | 0.442 | **0.339** | 0.608 | **0.573** | 0.984 |
+| synthetic, after the trailing check (thr 0.02) | 0.648 | 0.690 | 0.424 | 0.369 | 0.415 | 0.315 | 0.582 | 0.553 | 0.984 |
+
+### What it says
+
+- **Event detection is not an annotation artefact.** With exact labels the
+  label-aware event F1 rises from 0.671 to 0.701 and any-label F1 from 0.791 to
+  0.848; the median centre error halves (46 ms → 26 ms) and the length ratio
+  stays at 1.0. The public-set score was, if anything, held down by its human
+  labels, not propped up by them. Recall and precision are balanced here
+  (0.700 / 0.702) where the public set showed the model under-reporting
+  (0.632 / 0.715): the synthetic clips have fewer, cleaner events.
+- **The per-sound picture is the one that changes.** Alarm (0.42 → 0.78) and
+  shaver (0.56 → 0.74) were being under-credited by the public annotation
+  (alarms are often sub-second and annotated loosely); blender (0.74 → 0.20),
+  frying (0.70 → 0.28) and vacuum (0.76 → 0.52) collapse on the synthetic
+  clips. Those three are long, stationary textures that Scaper places as
+  background-like foreground events and mixes at controlled levels; the model
+  learned them from the public-style clips where they fill the whole 10 s. This
+  is a real weakness of the adapter on quiet, partial textures, not noise in the
+  public labels.
+- **The query-type total is unchanged (0.582 → 0.573)** while its composition
+  moves: ORDINAL gains (0.551 → 0.700, fewer events per clip make counting
+  easier), WHILE loses (0.502 → 0.339). Scaper overlaps are short and exact; the
+  0.3 s overlap filter keeps WHILE questions whose true overlap is often under a
+  second, and a 26 ms centre error is still enough to miss a 0.5 IoU on a
+  window that short. WHILE at 0.34 on exact labels is the clearest open
+  weakness in the composed-question stack.
+- **The trailing check still does nothing** (0.701 → 0.695; 69 removals, 34
+  right, 35 wrong). It stays off on real audio, as before.
+
+The thesis number on real recordings stays the public-set one (0.671 / 0.582);
+this test is its exact-label cross-check, and the cross-check agrees.
