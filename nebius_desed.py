@@ -29,6 +29,8 @@ Knobs (environment variables, all optional):
     CTAG_Q_ADAPTER          question-trained adapter      (runs/lora_q_text)
     CTAG_T_ADAPTER          timeline adapter              (runs/lora_transcribe)
     CTAG_DESED_ZEROSHOT_N   untrained reference, questions (700; 0 skips)
+    CTAG_DESED_ARMS         0 skips steps 1-2 (arm C / arm F), e.g. to score only the
+                            timeline adapter on another set such as data/desed/synth20_eval  (1)
     CTAG_DESED_TRAIL_THR    trailing-check threshold      (0.02, tuned on ESC-50 val)
     CTAG_PRECISION          bf16 | fp16 | 8bit | 4bit     (bf16)
     CTAG_N                  first N clips / questions only (dry runs)
@@ -51,6 +53,7 @@ OUT = os.environ.get("CTAG_DESED_OUT", "runs/desed")
 Q_ADAPTER = os.environ.get("CTAG_Q_ADAPTER", "runs/lora_q_text")
 T_ADAPTER = os.environ.get("CTAG_T_ADAPTER", "runs/lora_transcribe")
 ZEROSHOT_N = os.environ.get("CTAG_DESED_ZEROSHOT_N", "700")
+ARMS = os.environ.get("CTAG_DESED_ARMS", "1") == "1"
 TRAIL_THR = os.environ.get("CTAG_DESED_TRAIL_THR", "0.02")
 PRECISION = os.environ.get("CTAG_PRECISION", "bf16")
 # CTAG_OPEN_VOCAB=1: no sound-name list in the transcription prompt (for an adapter trained that way)
@@ -101,7 +104,7 @@ def check_inputs():
     first = json.loads(open(BENCH, encoding="utf-8").readline())
     if not os.path.exists(first["audio"]):
         raise SystemExit(f"audio not found at {first['audio']}; scripts/nebius_sync.sh push-desed <ip> copies the wav files")
-    for name, adapter in (("question", Q_ADAPTER), ("timeline", T_ADAPTER)):
+    for name, adapter in ((("question", Q_ADAPTER),) if ARMS else ()) + (("timeline", T_ADAPTER),):
         if not os.path.exists(os.path.join(adapter, "adapter_config.json")):
             print(f"[desed] WARNING: the {name} adapter is not at {adapter}; its steps will fail "
                   f"(scripts/nebius_sync.sh push <ip>, or train it first)", flush=True)
@@ -114,13 +117,18 @@ check_inputs()
 os.makedirs("logs", exist_ok=True)
 
 # 1. the question-trained adapter, asked directly (the report's Method C at scale)
-run("arm C at scale asked directly on DESED public",
-    py + ["ctag.run_zeroshot", "--model", "qwen2.5-omni", "--adapter", Q_ADAPTER, "--precision", PRECISION,
-          "--bench", BENCH, "--out", f"{OUT}/public_q_text"] + n_arg + mid,
-    f"{OUT}/public_q_text/summary.json")
+if not ARMS:
+    print("\n=== arms C and F: skipped (CTAG_DESED_ARMS=0) ===", flush=True)
+else:
+    run("arm C at scale asked directly on DESED public",
+        py + ["ctag.run_zeroshot", "--model", "qwen2.5-omni", "--adapter", Q_ADAPTER, "--precision", PRECISION,
+              "--bench", BENCH, "--out", f"{OUT}/public_q_text"] + n_arg + mid,
+        f"{OUT}/public_q_text/summary.json")
 
 # 2. the same adapter as the sound locator inside the decomposition (Method F at scale)
-if MODEL_ID:
+if not ARMS:
+    pass
+elif MODEL_ID:
     print("\n=== arm F at scale on DESED public: skipped, ctag.run_agent has no --model-id ===", flush=True)
 else:
     run("arm F at scale on DESED public (arm C adapter inside the decomposition)",

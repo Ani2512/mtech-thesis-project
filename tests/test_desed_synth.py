@@ -31,3 +31,23 @@ def test_recipe_to_tsv_round_trip(tmp_path):
         ("07.wav", "Dishes", "2.000", "3.550"),                # merged across the 0.05 s gap
         ("07.wav", "Vacuum_cleaner", "9.200", "10.000"),       # clipped to the clip, suffix stripped
         ("08.wav", "", "", "")]                                # the empty soundscape keeps one blank row
+
+
+def test_desed_runner_can_skip_the_question_adapter_steps():
+    import os
+    import subprocess
+
+    env = {**os.environ, "CTAG_DRY_RUN": "1", "CTAG_DESED_ARMS": "0", "CTAG_DESED_ZEROSHOT_N": "0",
+           "CTAG_DESED_BENCH": "data/desed/synth20_eval/benchmark.jsonl",
+           "CTAG_DESED_TIMELINES": "data/desed/synth20_eval/timelines.jsonl", "CTAG_T_ADAPTER": "runs/lora_real",
+           "CTAG_OPEN_VOCAB": "1"}
+    out = subprocess.run([sys.executable, "nebius_desed.py"], capture_output=True, text=True, env=env)
+    assert out.returncode == 0, out.stderr[-1500:]
+    cmds = [json.loads(l[4:]) for l in out.stdout.splitlines() if l.startswith("DRY ")]
+    assert cmds and not any(c[2] == "ctag.run_zeroshot" for c in cmds)
+    assert not any("--grounder" in c and c[c.index("--grounder") + 1] == "qwen2.5-omni" for c in cmds)
+    t = next(c for c in cmds if c[2] == "ctag.run_transcribe")
+    assert "--no-vocab-in-prompt" in t and t[t.index("--adapter") + 1] == "runs/lora_real" and "synth20_eval" in t[t.index("--bench") + 1]
+    env["CTAG_DESED_ARMS"] = "1"
+    out = subprocess.run([sys.executable, "nebius_desed.py"], capture_output=True, text=True, env=env)
+    assert any(json.loads(l[4:])[2] == "ctag.run_zeroshot" for l in out.stdout.splitlines() if l.startswith("DRY "))

@@ -224,3 +224,23 @@ the held-out real clips and applied to the public set. About 5 h on an L40S,
 What to read in the final table: the DESED label-aware event F1 (0.023 / 0.039
 before) and the per-sound recall for speech, dishes, frying and blender, which no
 generated clip could teach; the composed-test row says what the stage cost there.
+
+## The exact-label test (`nebius_desed.py` on the synthetic evaluation set)
+
+The real-data adapter scored on DCASE 2020's synthetic evaluation soundscapes
+(docs/real_recordings.md, "The exact-label test"): the same ten classes and real
+sound sources as the public set, labels exact by construction.
+
+```bash
+scripts/nebius_sync.sh push-synth <ip>                  # 256 MB
+# VM
+CTAG_DESED_BENCH=data/desed/synth20_eval/benchmark.jsonl CTAG_DESED_TIMELINES=data/desed/synth20_eval/timelines.jsonl \
+CTAG_DESED_OUT=runs/synth20_real CTAG_T_ADAPTER=runs/lora_real CTAG_OPEN_VOCAB=1 CTAG_DESED_ARMS=0 CTAG_DESED_ZEROSHOT_N=0 \
+  nohup python nebius_desed.py > logs/synth20.log 2>&1 &
+```
+
+About 40 min on the L40S for 828 clips (transcription with stop probabilities,
+every query type, trailing check). Compare `runs/synth20_real` with
+`runs/real/transcribe_public` (0.671 event F1): the difference is what the
+public set's human annotation costs; the synthetic number is the one no
+reviewer can dispute.
