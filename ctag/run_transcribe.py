@@ -102,6 +102,26 @@ def model_transcriber(name: str, vocab: list[str] | None, stop_probs: bool = Fal
     return t
 
 
+def resumable_rows(path: Path, clip_ids: set, need_stop_probs: bool) -> dict:
+    """Finished rows of an interrupted run, keyed by clip id, so a preempted VM
+    can pick up where it stopped. Only clips of the current benchmark count, and
+    a row without stop probabilities does not count when they are requested."""
+    if not path.exists():
+        return {}
+    done = {}
+    for line in open(path, encoding="utf-8"):
+        line = line.strip()
+        if not line:
+            continue
+        try:
+            row = json.loads(line)
+        except json.JSONDecodeError:      # a half-written last line
+            continue
+        if row.get("clip_id") in clip_ids and (not need_stop_probs or "stop_probs" in row):
+            done[row["clip_id"]] = row
+    return done
+
+
 def main(argv=None):
     ap = argparse.ArgumentParser()
     ap.add_argument("--model", required=True, help="'mock:oracle' or a model name from ctag.models")
@@ -123,6 +143,8 @@ def main(argv=None):
     ap.add_argument("--seed", type=int, default=0)
     ap.add_argument("--stop-probs", action="store_true",
                     help="also record the model's P(stop) before each event (ctag.stopprob), for ctag.trailing")
+    ap.add_argument("--no-resume", action="store_true",
+                    help="ignore an existing <out>/pred_timelines.jsonl instead of keeping its finished clips")
     a = ap.parse_args(argv)
 
     gold = load_timelines(Path(a.timelines))
@@ -151,8 +173,17 @@ def main(argv=None):
     clips = clips_of(Path(a.bench))
     if a.n is not None:
         clips = clips[: a.n]
+    done = {} if a.no_resume else resumable_rows(out / "pred_timelines.jsonl", {c[0] for c in clips}, a.stop_probs)
+    if done:
+        print(f"resuming: {len(done)} of {len(clips)} clips already transcribed", flush=True)
     with open(out / "pred_timelines.jsonl", "w", encoding="utf-8") as fo:
+        for row in done.values():
+            rows.append(row)
+            fo.write(json.dumps(row, ensure_ascii=False) + "\n")
+        fo.flush()
         for k, (cid, audio, duration) in enumerate(clips):
+            if cid in done:
+                continue
             raw = t(cid, audio, duration)
             probs = None
             if a.stop_probs:
