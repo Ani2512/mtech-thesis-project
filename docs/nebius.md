@@ -239,8 +239,10 @@ CTAG_DESED_OUT=runs/synth20_real CTAG_T_ADAPTER=runs/lora_real CTAG_OPEN_VOCAB=1
   nohup python nebius_desed.py > logs/synth20.log 2>&1 &
 ```
 
-About 40 min on the L40S for 828 clips (transcription with stop probabilities,
-every query type, trailing check). Compare `runs/synth20_real` with
-`runs/real/transcribe_public` (0.671 event F1): the difference is what the
-public set's human annotation costs; the synthetic number is the one no
-reviewer can dispute.
+Run 2026-11-21 through the boot service (`scripts/nebius_service.sh install
+nebius_desed.py CTAG_DESED_BENCH=... CTAG_DESED_ARMS=0 ...`): about 35 min on the
+L40S for the 806 clips with events, plus one preemption. The transcribe step
+resumes from an existing `pred_timelines.jsonl` since that run (761 finished
+clips kept; `--no-resume` to redo). Result: event F1 0.701 against 0.671 on the
+public set, every type 0.573 against 0.582 (docs/results_real_stage.md, "The
+exact-label test"). The public-set numbers were not inflated by human labels.
